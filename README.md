@@ -2,9 +2,6 @@
 
 Author: Huanchen Zhang
 
-## Name
-Radix Tree
-
 ## Description
 Radix Tree is a user-space library written in C++ that implements a radix tree that relies on fabric-attached memory (FAM) atomics, which are atomics primitives within a cache-incoherent memory-semantic fabric environment.
 
@@ -12,7 +9,8 @@ A radix tree (also known as a radix trie) is a space-optimized trie data structu
 
 FAM atomic operations permit programs to perform operations such as write, compare-and-store (analogous to compare-and-swap), or fetch-and-add on operands located in fabric-attached memory atomically. Use of these atomics permits programs running on multiple non-coherent SoCs in a shared FAM environment to transactionally update the radix tree in a controlled fashion.
 
-Radix Tree incorporates a very simple transaction manager that uses a single global lock to provide concurrency control between competing transactions. The radix tree relies on the FAM-aware Non-Volatile Memory Manager (NVMM) library, which is available from https://github.hpe.com/labs/nvmm.
+Radix Tree incorporates a very simple transaction manager that uses a single global lock to provide concurrency control between competing transactions. The radix tree relies on the FAM-aware Non-Volatile Memory Manager (NVMM) library, which is available from https://github.hpe.com/labs/nvmm
+or https://github.com/HewlettPackard/gull.
 
 ## Master Source
 
@@ -31,12 +29,15 @@ While Radix Tree is designed to work on FAM, currently it only runs on NUMA syst
 
 ## Dependencies
 
-Radix Tree requires a l4tm (Linux for The Machine) system, e.g., build-l4tm-X.u.labs.hpecorp.net
-(X=1,2,3,4). Please install the following dependencies
+Radix Tree depends on cmake, libboost, libfam-atomic (https://github.com/FabricAttachedMemory/libfam-atomic), and nvml (https://github.com/FabricAttachedMemory/nvml). 
+
+For internal users who have access to an l4tm (Linux for The Machine) system, e.g.,
+build-l4tm-X.u.labs.hpecorp.net (X=1,2,3,4). Please install the following dependencies
 ```
 $ sudo apt-get install cmake libboost-all-dev
 $ sudo apt-get install libfam-atomic2 libfam-atomic2-dbg libfam-atomic2-dev libpmem libpmem-dev
 ```
+Please email Robert Chapman (robert.chapman@hpe.com) for getting access to build-l4tm-X.u.labs.hpecorp.net.
 
 Radix Tree uses Non-Volatile Memory Manager (NVMM). Before building the radix tree, please
 download and build NVMM.
