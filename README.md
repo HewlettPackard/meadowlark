@@ -94,5 +94,5 @@ download and build NVMM.
 
 ## Usage
 
-Please see test/test_transaction.cpp and test/test_radix_tree.cpp
+Please see test/test_transaction.cc and test/test_radix_tree.cc
 
