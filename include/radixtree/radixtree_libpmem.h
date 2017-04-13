@@ -28,7 +28,8 @@
 #include <libpmem.h>
 
 namespace radixtree {
-}
-    
+#ifdef PMEM_INVALIDATE_NOOP
+void pmem_invalidate(void *addr, size_t len);
 #endif
-
+}
+#endif

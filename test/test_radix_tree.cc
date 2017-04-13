@@ -22,517 +22,312 @@
  *
  */
 
-//************************************************
-// RadixTree unit tests
-//************************************************
-#include "radixtree/status.h"
-
-#include "gtest/gtest.h"
-#include "radixtree/RadixTree.h"
-#include "radixtree/Transaction.h"
-
+#include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
-#include <algorithm>
+#include <string.h>
+#include <string>
+#include <gtest/gtest.h>
+#include <boost/filesystem.hpp>
+#include <random>
 
-#include "radixtree/log.h"
+#include "radixtree/radixtree_libpmem.h"
+#include "radixtree/radixtree_fam_atomic.h"
+#include "radixtree/radix_tree.h"
+
+#include "nvmm/memory_manager.h"
+#include "nvmm/heap.h"
+#include "nvmm/root_shelf.h"
 
 using namespace radixtree;
+using namespace nvmm;
 
-static const unsigned TEST_SIZE = 10000;
-//static const unsigned TEST_SIZE = 2;
-static const unsigned VALUES_PER_KEY = 5;
-
-static const unsigned BUFFER_SIZE = 1024;
-
-static const unsigned MIN_STR_LEN = 2;
-static const unsigned MAX_STR_LEN = 20;
-
-static const char alphanum[] =
-    "0123456789"
-    "!@#$%^&*"
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    "abcdefghijklmnopqrstuvwxyz";
-
-static const int stringLength = sizeof(alphanum) - 1;
-
-class RadixTreeUnitTest : public ::testing::Test {
-  public:
-    //*******************************************************
-    // Random string generator
-    inline char getRandomChar () {
-      return alphanum[rand() % stringLength];
-    }
-
-    inline std::string getRandomString () {
-      std::string str = "c:\\home\\Daniel";
-      unsigned len = MIN_STR_LEN + rand() % (MAX_STR_LEN - MIN_STR_LEN);
-      for(unsigned i = 0; i < len; i++) {
-        str += getRandomChar();
-      }
-      return str;
-    }
-    //*******************************************************
-
-    virtual void SetUp () {	
-      init_log(SeverityLevel::off, "");
-      //srand((unsigned)time(NULL));
-      srand(0); // fix seed for debugging
-      //for (unsigned i = 0; i < TEST_SIZE; i++)
-      //keys.push_back(getRandomString());
-
-      keyBufLen = BUFFER_SIZE;
-      valueBufLen = BUFFER_SIZE;
-
-      index = new RadixTree();
-      indexMulti = new RadixTree(false);
-    }
-
-    virtual void TearDown () {
-      delete index;
-      delete indexMulti;
-    }
-
-    inline void init (unsigned size) {
-      for (unsigned i = 0; i < size; i++)
-        keys.push_back(getRandomString());
-    }
-
-    inline void load () {
-      for (unsigned i = 0; i < TEST_SIZE; i++)
-        index->insert(keys[i].c_str(), (int)keys[i].length(),
-            keys[i].c_str(), (int)keys[i].length());
-    }
-
-    inline void loadMulti () {
-      for (unsigned i = 0; i < VALUES_PER_KEY; i++)
-        values.push_back(getRandomString());
-
-      sortKeys();
-
-      for (unsigned i = 0; i < TEST_SIZE; i++) {
-        while (keys[i] == keys[i+1])
-          i++;
-       
-        for (unsigned j = 0; j < VALUES_PER_KEY; j++)
-          ASSERT_EQ(indexMulti->insert(keys[i].c_str(), (int)keys[i].length(),
-              values[j].c_str(), (int)values[j].length()).ok(), true);
-      }
-    }
-
-    inline void sortKeys () {
-      std::sort(keys.begin(), keys.end());
-    }
-
-  public:
-
-    RadixTree *index;
-    RadixTree *indexMulti;
-    std::vector<std::string> keys;
-    std::vector<std::string> values;
-
-    char keyBuf[BUFFER_SIZE];
-    int keyBufLen;
-    char valueBuf[BUFFER_SIZE];
-    int valueBufLen;
-
-};
-
-
-
-TEST_F(RadixTreeUnitTest, EmptyTest) {
-  EXPECT_TRUE(true);
+std::random_device r;
+std::default_random_engine e1(r());
+uint64_t rand_uint64(uint64_t min, uint64_t max)
+{
+    std::uniform_int_distribution<uint64_t> uniform_dist(min, max);
+    return uniform_dist(e1);
 }
 
-TEST_F(RadixTreeUnitTest, InsertFindTest) {
-  init(TEST_SIZE);
-  load();
+std::string rand_string(size_t min_len, size_t max_len)
+{
+    static char const dict[] =
+        "0123456789"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz";
 
-  //index->printRoot();
-
-  RadixTree::Iter iter;
-  for (unsigned i = 0; i < TEST_SIZE; i++) {
-    keyBufLen = BUFFER_SIZE;
-    valueBufLen = BUFFER_SIZE;
-
-    EXPECT_EQ(index->scan(keyBuf, keyBufLen, valueBuf, valueBufLen, iter, keys[i].c_str(), (int)keys[i].length(), true, keys[i].c_str(), (int)keys[i].length(), true).ok(), true);
-
-    EXPECT_EQ(valueBufLen, (int)keys[i].length());
-
-    for (int j = 0; j < valueBufLen; j++)
-      EXPECT_EQ(valueBuf[j], keys[i].c_str()[j]);
-
-    EXPECT_EQ(keyBufLen, (int)keys[i].length());
-
-    for (int j = 0; j < keyBufLen; j++)
-      EXPECT_EQ(keyBuf[j], keys[i].c_str()[j]);
-  }
-}
-
-
-TEST_F(RadixTreeUnitTest, LowerBoundInclusiveTest) {
-  init(TEST_SIZE);
-  load();
-
-  RadixTree::Iter iter;
-  for (unsigned i = 0; i < TEST_SIZE - 1; i++) {
-    keyBufLen = BUFFER_SIZE;
-    valueBufLen = BUFFER_SIZE;
-
-    EXPECT_EQ(index->scan(keyBuf, keyBufLen, valueBuf, valueBufLen, iter, keys[i].c_str(), (int)keys[i].length(), true, Transaction::OPEN_BOUNDARY.c_str(), (int)Transaction::OPEN_BOUNDARY.length(), false).ok(), true);
-
-    EXPECT_EQ(valueBufLen, (int)keys[i].length());
-
-    for (int j = 0; j < valueBufLen; j++)
-      EXPECT_EQ(valueBuf[j], keys[i].c_str()[j]);
-
-    EXPECT_EQ(keyBufLen, (int)keys[i].length());
-
-    for (int j = 0; j < keyBufLen; j++)
-      EXPECT_EQ(keyBuf[j], keys[i].c_str()[j]);
-  }
-}
-
-
-TEST_F(RadixTreeUnitTest, LowerBoundExclusiveTest) {
-  init(TEST_SIZE);
-  load();
-  sortKeys();
-
-  int s = 0; //same key offset
-  RadixTree::Iter iter;
-  for (unsigned i = 0; i < TEST_SIZE - 1; i++) {
-    keyBufLen = BUFFER_SIZE;
-    valueBufLen = BUFFER_SIZE;
-
-    i += s;
-    s = 0;
-
-    while (keys[i] == keys[i+1+s])
-      s++;
-
-    EXPECT_EQ(index->scan(keyBuf, keyBufLen, valueBuf, valueBufLen, iter, keys[i].c_str(), (int)keys[i].length(), false, Transaction::OPEN_BOUNDARY.c_str(), (int)Transaction::OPEN_BOUNDARY.length(), false).ok(), true);
-
-    EXPECT_EQ(valueBufLen, (int)keys[i+1+s].length());
-
-    for (int j = 0; j < valueBufLen; j++)
-      EXPECT_EQ(valueBuf[j], keys[i+1+s].c_str()[j]);
-
-    EXPECT_EQ(keyBufLen, (int)keys[i+1+s].length());
-
-    for (int j = 0; j < keyBufLen; j++)
-      EXPECT_EQ(keyBuf[j], keys[i+1+s].c_str()[j]);
-  }
-}
-
-
-TEST_F(RadixTreeUnitTest, GetNextTest) {
-  init(TEST_SIZE);
-  load();
-  sortKeys();
-  keys.push_back(getRandomString());
-
-  //index->printRoot();
-  
-  RadixTree::Iter iter;
-  //index->lowerBound(iter, "\0", 1, true);
-  keyBufLen = BUFFER_SIZE;
-  valueBufLen = BUFFER_SIZE;
-  EXPECT_EQ(index->scan(keyBuf, keyBufLen, valueBuf, valueBufLen, iter, Transaction::OPEN_BOUNDARY.c_str(), (int)Transaction::OPEN_BOUNDARY.length(), false, Transaction::OPEN_BOUNDARY.c_str(), (int)Transaction::OPEN_BOUNDARY.length(), false).ok(), true);
-
-  keyBufLen = BUFFER_SIZE;
-  valueBufLen = BUFFER_SIZE;
-  
-  while (index->getNext(keyBuf, keyBufLen, valueBuf, valueBufLen, iter).ok()) {
-
-      std::string key(keyBuf, keyBufLen);
-      std::string val(valueBuf, valueBufLen);
-      
-      EXPECT_EQ(key, val);
-      
-      keyBufLen = BUFFER_SIZE;
-      valueBufLen = BUFFER_SIZE;
-    
-  }
-}
-
-
-TEST_F(RadixTreeUnitTest, UpdateTest) {
-  init(TEST_SIZE);
-  load();
-  sortKeys();
-
-  RadixTree::Iter iter;
-  int s = 0; //same key offset
-  for (unsigned i = 0; i < TEST_SIZE - 1; i++) {
-    i += s;
-    s = 0;
-
-    while (keys[i] == keys[i+1+s])
-      s++;
-
-    Status retCode = index->update(keys[i].c_str(), (unsigned)keys[i].length(), keys[i+1+s].c_str(), (unsigned)keys[i+1+s].length());
-    EXPECT_EQ(retCode.ok(), true);
-  }
-
-  s = 0;
-  for (unsigned i = 0; i < TEST_SIZE - 1; i++) {
-    i += s;
-    s = 0;
-
-    while (keys[i] == keys[i+1+s])
-      s++;
-
-    EXPECT_EQ(index->find(iter, keys[i].c_str(), (unsigned)keys[i].length()), true);
-
-    RadixTree::Value* val = index->getValue(iter);
-
-    EXPECT_EQ(val->len, (uint32_t)keys[i+1+s].length());
-    for (unsigned j = 0; j < val->len; j++)
-      EXPECT_EQ(val->data[j], keys[i+1+s].c_str()[j]);
-  }
-}
-
-
-TEST_F(RadixTreeUnitTest, DeleteTest) {
-  init(TEST_SIZE);
-  load();
-  sortKeys();
-
-  RadixTree::Iter iter;
-  int s = 0; //same key offset
-  for (unsigned i = 0; i < TEST_SIZE - 1; i++) {
-    while (keys[i] == keys[i+1])
-      i++;
-
-    if (i % 2 == 0) {
-      Status retCode = index->remove(keys[i].c_str(), (unsigned)keys[i].length());
-      EXPECT_EQ(retCode.ok(), true);
+    size_t len = (size_t)rand_uint64(min_len, max_len);
+    std::string ret(len, '\0');
+    for (size_t i = 0; i < len; i++)
+    {
+        ret[i]=dict[rand_uint64(0,sizeof(dict)-2)];
     }
-  }
 
-  for (unsigned i = 0; i < TEST_SIZE - 1; i++) {
-    while (keys[i] == keys[i+1+s])
-      i++;
+    return ret;
+}
 
-    if (i % 2 == 0)
-      EXPECT_EQ(index->find(iter, keys[i].c_str(), (unsigned)keys[i].length()), false);
-    else {
-      EXPECT_EQ(index->find(iter, keys[i].c_str(), (unsigned)keys[i].length()), true);
+TEST(RadixTree, SingleProcess) {
+    PoolId const heap_id = 1; // assuming we only use heap id 1
+    size_t const heap_size = 1024*1024*1024; // 1024MB
 
-      RadixTree::Value* val = index->getValue(iter);
+    // init memory manager and heap
+    MemoryManager *mm = MemoryManager::GetInstance();
+    Heap *heap = nullptr;
+    EXPECT_EQ(NO_ERROR, mm->CreateHeap(heap_id, heap_size));
+    EXPECT_EQ(NO_ERROR, mm->FindHeap(heap_id, &heap));
+    EXPECT_NE(nullptr, heap);
 
-      EXPECT_EQ(val->len, (uint32_t)keys[i].length());
-      for (unsigned j = 0; j < val->len; j++)
-        EXPECT_EQ(val->data[j], keys[i].c_str()[j]);
+    // open the heap
+    EXPECT_EQ(NO_ERROR, heap->Open());
+
+    // init the radix tree
+    RadixTree *tree = nullptr;
+    GlobalPtr root;
+    // create a new radix tree
+    tree = new RadixTree(mm, heap);
+    root = tree->get_root();
+    EXPECT_NE(nullptr, tree);
+    delete tree;
+
+    // open an existing radix tree
+    tree = new RadixTree(mm, heap, root);
+    EXPECT_NE(nullptr, tree);
+
+    // test put, get, destroy
+    bool success;
+    RadixTree::key_type key_buf;
+    int key_size;
+    memset(&key_buf, 0, sizeof(key_buf));
+    uint64_t key, value;
+    uint64_t *value_ptr;
+    GlobalPtr value_gptr, result;
+
+    // get 1
+    key = 1;
+    key_size = sizeof(key);
+    memcpy((char*)&key_buf, (char*)&key, key_size);
+    result = tree->get(key_buf, key_size);
+    EXPECT_EQ(0UL, result);
+
+    // destroy 1
+    key = 1;
+    key_size = sizeof(key);
+    memcpy((char*)&key_buf, (char*)&key, key_size);
+    result = tree->destroy(key_buf, key_size);
+    EXPECT_EQ(0UL, result);
+
+    // put 1:1
+    key = 1;
+    key_size = sizeof(key);
+    memcpy((char*)&key_buf, (char*)&key, key_size);
+
+    value = 1;
+    value_gptr = heap->Alloc(sizeof(value));
+    value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+    *value_ptr = value;
+    pmem_persist(value_ptr, sizeof(value));
+
+    success = tree->put(key_buf, key_size, value_gptr);
+    EXPECT_EQ(true, success);
+
+    // get 1
+    key = 1;
+    key_size = sizeof(key);
+    memcpy((char*)&key_buf, (char*)&key, key_size);
+    result = tree->get(key_buf, key_size);
+    EXPECT_EQ(value_gptr, result);
+
+    // destroy 1
+    key = 1;
+    key_size = sizeof(key);
+    memcpy((char*)&key_buf, (char*)&key, key_size);
+    result = tree->destroy(key_buf, key_size);
+    EXPECT_EQ(value_gptr, result);
+    heap->Free(result);
+
+    // get 1
+    key = 1;
+    key_size = sizeof(key);
+    memcpy((char*)&key_buf, (char*)&key, key_size);
+    result = tree->get(key_buf, key_size);
+    EXPECT_EQ(0UL, result);
+
+    delete tree;
+
+    EXPECT_EQ(NO_ERROR, heap->Close());
+    EXPECT_EQ(NO_ERROR, mm->DestroyHeap(heap_id));
+}
+
+// multi-process
+static int const process_count = 16;
+static int const loop_count = 500;
+
+void DoWork(GlobalPtr root, PoolId heap_id)
+{
+    // =======================================================================
+    // init memory manager and heap
+    MemoryManager *mm = MemoryManager::GetInstance();
+    Heap *heap = nullptr;
+    EXPECT_EQ(NO_ERROR, mm->FindHeap(heap_id, &heap));
+    EXPECT_NE(nullptr, heap);
+
+    // open the heap
+    EXPECT_EQ(NO_ERROR, heap->Open());
+
+    // init the radix tree
+    RadixTree *tree = nullptr;
+    tree = new RadixTree(mm, heap, root);
+    EXPECT_NE(nullptr, tree);
+
+    // =======================================================================
+    // stress test
+    pid_t pid = getpid();
+
+    RadixTree::key_type key_buf;
+    memset(&key_buf, 0, sizeof(key_buf));
+    std::string key;
+    size_t key_size;
+    std::string value;
+    size_t value_size;
+    uint64_t *value_ptr;
+    GlobalPtr value_gptr, result;
+
+    GlobalPtr ptr;
+    for (int i=0; i<loop_count; i++)
+    {
+        key = rand_string(1, sizeof(key_buf)-1);
+        key_size = key.size();
+        memcpy((char*)&key_buf, key.c_str(), key_size+1);
+
+        value = rand_string(0, sizeof(key_buf)-1);
+        value_size = value.size();
+        value_gptr = heap->Alloc(value_size);
+        value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+        memcpy((char*)value_ptr, value.c_str(), value_size+1);
+        pmem_persist(value_ptr, value_size+1);
+
+        int op=(i+pid)%3;
+        if (op==0)
+        {
+            tree->put(key_buf, (int)key_size, value_gptr);
+        }
+        else if (op==1)
+        {
+            tree->get(key_buf, (int)key_size);
+        }
+        else
+        {
+            GlobalPtr result = tree->destroy(key_buf, (int)key_size);
+            if (result!=0)
+                heap->Free(result);
+        }
     }
-  }
+    std::cout << pid << " DONE" << std::endl;
+
+    // =======================================================================
+    // close the heap
+    EXPECT_EQ(NO_ERROR, heap->Close());
+    delete heap;
+    delete tree;
+}
+
+TEST(RadixTree, MultiProcessStress) {
+    PoolId const heap_id = 1; // assuming we only use heap id 1
+    size_t const heap_size = 1024*1024*1024; // 1024MB
+
+    // =======================================================================
+    // init memory manager and heap
+    MemoryManager *mm = MemoryManager::GetInstance();
+    Heap *heap = nullptr;
+    EXPECT_EQ(NO_ERROR, mm->CreateHeap(heap_id, heap_size));
+    EXPECT_EQ(NO_ERROR, mm->FindHeap(heap_id, &heap));
+    EXPECT_NE(nullptr, heap);
+
+    // open the heap
+    EXPECT_EQ(NO_ERROR, heap->Open());
+
+    // init the radix tree
+    RadixTree *tree = nullptr;
+    GlobalPtr root;
+    // create a new radix tree
+    tree = new RadixTree(mm, heap);
+    root = tree->get_root();
+    EXPECT_NE(nullptr, tree);
+    delete tree;
+
+    // close the heap
+    EXPECT_EQ(NO_ERROR, heap->Close());
+
+    // =======================================================================
+    // do work
+    pid_t pid[process_count];
+
+    for (int i=0; i< process_count; i++)
+    {
+        pid[i] = fork();
+        ASSERT_LE(0, pid[i]);
+        if (pid[i]==0)
+        {
+            // child
+            DoWork(root, heap_id);
+            exit(0); // this will leak memory (see valgrind output)
+        }
+        else
+        {
+            // parent
+            continue;
+        }
+    }
+
+    for (int i=0; i< process_count; i++)
+    {
+        int status;
+        waitpid(pid[i], &status, 0);
+    }
+
+    // =======================================================================
+    // destroy the heap
+    EXPECT_EQ(NO_ERROR, mm->DestroyHeap(heap_id));
+    // tree = new RadixTree(mm, heap, root);
+    // tree->list([&mm](const RadixTree::key_type &key, const int key_size, GlobalPtr p) {
+    //         char *value = (char*)mm->GlobalToLocal(p);
+    //         std::cout <<"  " << std::string((const char*)&key, sizeof(key))  << " -> " << std::string(value) << std::endl;
+    //         });
+    // delete tree;
 }
 
 
-
-TEST_F(RadixTreeUnitTest, MultiInsertFindTest) {
-  init(TEST_SIZE + 1);
-  loadMulti();
-
-  int s = 0; //same key offset
-  RadixTree::Iter iter;
-  for (unsigned i = 0; i < TEST_SIZE - 1; i++) {
-    keyBufLen = BUFFER_SIZE;
-    valueBufLen = BUFFER_SIZE;
-
-    i += s;
-    s = 0;
-
-    while (keys[i] == keys[i+1+s])
-      s++;
-
-    EXPECT_EQ(indexMulti->scan(keyBuf, keyBufLen, valueBuf, valueBufLen, iter, keys[i].c_str(), (int)keys[i].length(), true, keys[i+1+s].c_str(), (int)keys[i+1+s].length(), true).ok(), true);
-
-    EXPECT_EQ(valueBufLen, (int)values[0].length());
-
-    std::string valueBufStr(valueBuf, valueBufLen);
-    std::string valuesStr(values[0]);
-    EXPECT_EQ(valueBufStr, valuesStr);
-
-    EXPECT_EQ(keyBufLen, (int)keys[i].length());
-    std::string keyBufStr(keyBuf, keyBufLen);
-    std::string keysStr(keys[i]);
-    EXPECT_EQ(keyBufStr, keysStr);
-
-    for (unsigned k = 1; k < VALUES_PER_KEY; k++) {
-      unsigned k_reversed = VALUES_PER_KEY - k;
-      keyBufLen = BUFFER_SIZE;
-      valueBufLen = BUFFER_SIZE;
-
-      EXPECT_EQ(indexMulti->getNext(keyBuf, keyBufLen, valueBuf, valueBufLen, iter).ok(), true);
-
-      EXPECT_EQ(valueBufLen, (int)values[k_reversed].length());
-
-      std::string valueBufStr(valueBuf, valueBufLen);
-      std::string valuesStr(values[k_reversed]);
-      EXPECT_EQ(valueBufStr, valuesStr);
-
-      EXPECT_EQ(keyBufLen, (int)keys[i].length());
-
-      std::string keyBufStr(keyBuf, keyBufLen);
-      std::string keysStr(keys[i]);
-      EXPECT_EQ(keyBufStr, keysStr);
+void Init()
+{
+    // check if SHELF_BASE_DIR exists
+    std::cout << "Init: Checking if lfs exists..." << std::endl;
+    boost::filesystem::path shelf_base_path = boost::filesystem::path(SHELF_BASE_DIR);
+    if (boost::filesystem::exists(shelf_base_path) == false)
+    {
+        std::cout << "Init: LFS does not exist " << SHELF_BASE_DIR << std::endl;
+        exit(1);
     }
 
-    keyBufLen = BUFFER_SIZE;
-    valueBufLen = BUFFER_SIZE;
-
-    ASSERT_EQ(indexMulti->getNext(keyBuf, keyBufLen, valueBuf, valueBufLen, iter).ok(), true);
-
-
-    EXPECT_EQ(keyBufLen, (int)keys[i+1+s].length());
-    std::string keyBufStr2(keyBuf, keyBufLen);
-    std::string keysStr2(keys[i+1+s]);
-    EXPECT_EQ(keyBufStr2, keysStr2);
-  }
-}
-
-
-TEST_F(RadixTreeUnitTest, MultiDeleteTest) {
-  init(TEST_SIZE + 1);
-  loadMulti();
-
-  int s = 0; //same key offset
-  RadixTree::Iter iter;
-  for (unsigned i = 0; i < TEST_SIZE - 1; i++) {
-    while (keys[i] == keys[i+1])
-      i++;
-    EXPECT_EQ(indexMulti->remove(keys[i].c_str(), (unsigned)keys[i].length(), values[VALUES_PER_KEY/2].c_str(), (unsigned)values[VALUES_PER_KEY/2].length()).ok(), true);
-  }
-
-  s = 0;
-
-  for (unsigned i = 0; i < TEST_SIZE - 1; i++) {
-    keyBufLen = BUFFER_SIZE;
-    valueBufLen = BUFFER_SIZE;
-
-    i += s;
-    s = 0;
-
-    while (keys[i] == keys[i+1+s])
-      s++;
-
-    EXPECT_EQ(indexMulti->scan(keyBuf, keyBufLen, valueBuf, valueBufLen, iter, keys[i].c_str(), (int)keys[i].length(), true, keys[i+1+s].c_str(), (int)keys[i+1+s].length(), true).ok(), true);
-
-    EXPECT_EQ(valueBufLen, (int)values[0].length());
-
-    for (int j = 0; j < valueBufLen; j++)
-      EXPECT_EQ(valueBuf[j], values[0].c_str()[j]);
-
-    EXPECT_EQ(keyBufLen, (int)keys[i].length());
-
-    for (int j = 0; j < keyBufLen; j++)
-      EXPECT_EQ(keyBuf[j], keys[i].c_str()[j]);
-
-    for (unsigned k = 1; k < VALUES_PER_KEY; k++) {
-      keyBufLen = BUFFER_SIZE;
-      valueBufLen = BUFFER_SIZE;
-
-      unsigned k_reversed = VALUES_PER_KEY - k;
-      if (k_reversed != VALUES_PER_KEY/2) {
-        EXPECT_EQ(indexMulti->getNext(keyBuf, keyBufLen, valueBuf, valueBufLen, iter).ok(), true);
-
-        EXPECT_EQ(valueBufLen, (int)values[k_reversed].length());
-
-
-        std::string valueBufStr(valueBuf, valueBufLen);
-        std::string valuesStr(values[k_reversed]);
-        //std::cout << "Comparing " << valueBufStr << " with " << valuesStr << std::endl;
-        EXPECT_EQ(valueBufStr, valuesStr);
-
-        EXPECT_EQ(keyBufLen, (int)keys[i].length());
-
-        std::string keyBufStr(keyBuf, keyBufLen);
-        std::string keysStr(keys[i]);
-        EXPECT_EQ(keyBufStr, keysStr);
-      }
+    // create a root shelf for MemoryManager if it does not exist
+    std::cout << "Init: Creating the root shelf if it does not exist..." << std::endl;
+    std::string root_shelf_file = std::string(SHELF_BASE_DIR) + "/" + SHELF_USER + "_NVMM_ROOT";
+    RootShelf root_shelf(root_shelf_file);
+    if(root_shelf.Exist() == false)
+    {
+        if(root_shelf.Create()!=NO_ERROR)
+        {
+            std::cout << "Init: Failed to create the root shelf file " << root_shelf_file << std::endl;
+            exit(1);
+        }
     }
-
-    keyBufLen = BUFFER_SIZE;
-    valueBufLen = BUFFER_SIZE;
-
-    ASSERT_EQ(indexMulti->getNext(keyBuf, keyBufLen, valueBuf, valueBufLen, iter).ok(), true);
-
-    EXPECT_EQ(valueBufLen, (int)values[0].length());
-
-    for (int j = 0; j < valueBufLen; j++)
-      EXPECT_EQ(valueBuf[j], values[0].c_str()[j]);
-
-    EXPECT_EQ(keyBufLen, (int)keys[i+1+s].length());
-
-    for (int j = 0; j < keyBufLen; j++)
-      EXPECT_EQ(keyBuf[j], keys[i+1+s].c_str()[j]);
-
-  }
 }
-
-
-TEST_F(RadixTreeUnitTest, MultiDeleteTest2) {
-  init(TEST_SIZE + 1);
-  loadMulti();
-
-  RadixTree::Iter iter;
-  for (unsigned i = 0; i < TEST_SIZE - 1; i++) {
-    while (keys[i] == keys[i+1])
-      i++;
-
-    if (i % 2 == 0)
-      EXPECT_EQ(indexMulti->remove(keys[i].c_str(), (unsigned)keys[i].length()).ok(), true);
-  }
-
-  for (unsigned i = 0; i < TEST_SIZE - 1; i++) {
-    keyBufLen = BUFFER_SIZE;
-    valueBufLen = BUFFER_SIZE;
-
-    while (keys[i] == keys[i+1])
-      i++;
-
-    if (i % 2 == 0)
-      EXPECT_EQ(indexMulti->scan(keyBuf, keyBufLen, valueBuf, valueBufLen, iter, keys[i].c_str(), (int)keys[i].length(), true, keys[i].c_str(), (int)keys[i].length(), true).ok(), false);
-    else {
-      EXPECT_EQ(indexMulti->scan(keyBuf, keyBufLen, valueBuf, valueBufLen, iter, keys[i].c_str(), (int)keys[i].length(), true, keys[i].c_str(), (int)keys[i].length(), true).ok(), true);
-
-      EXPECT_EQ(valueBufLen, (int)values[0].length());
-
-      for (int j = 0; j < valueBufLen; j++)
-        EXPECT_EQ(valueBuf[j], values[0].c_str()[j]);
-
-      EXPECT_EQ(keyBufLen, (int)keys[i].length());
-
-      for (int j = 0; j < keyBufLen; j++)
-        EXPECT_EQ(keyBuf[j], keys[i].c_str()[j]);
-    }
-  }
-}
-
 
 int main (int argc, char** argv) {
-  bool debug_console = false;
-  int c;
-  while ((c = getopt (argc, argv, "d")) != -1)
-    switch (c) {
-      case 'd':
-        debug_console = true;
-        break;
-      default:
-        continue;
-    }
-  if (debug_console)
-    init_log(debug, "");
-  else
-    init_log(debug);
+    // remove previous files in SHELF_BASE_DIR
+    std::string cmd = std::string("exec rm -f ") + SHELF_BASE_DIR + "/" + SHELF_USER + "* > /dev/null";
+    system(cmd.c_str());
 
-  ::testing::InitGoogleTest(&argc, argv);
-  // remove existing files in SHELF_BASE_DIR-------------------------------------
-  std::string cmd = std::string("exec rm -f ") + SHELF_BASE_DIR + "/" + SHELF_USER + "* > nul";
-  system(cmd.c_str());
-  //-----------------------------------------------------------------------------
-
-  return RUN_ALL_TESTS();
+    Init();
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
 }
