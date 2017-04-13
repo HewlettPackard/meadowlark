@@ -1,6 +1,6 @@
 # Radix Tree
 
-Contact: Yupu Zhang (yupu.zhang@hpe.com)
+Author: Huanchen Zhang
 
 ## Description
 Radix Tree is a user-space library written in C++ that implements a radix tree that relies on
@@ -19,19 +19,22 @@ FAM atomic operations permit programs to perform operations such as write, compa
 atomically. Use of these atomics permits programs running on multiple non-coherent SoCs in a shared
 FAM environment to transactionally update the radix tree in a controlled fashion.
 
-Radix tree relies on the FAM-aware Non-Volatile Memory Manager (NVMM) library, which is available
-from https://github.com/HewlettPackard/gull.
+Radix Tree incorporates a very simple transaction manager that uses a single global lock to provide
+concurrency control between competing transactions. The radix tree relies on the FAM-aware
+Non-Volatile Memory Manager (NVMM) library, which is available from https://github.com/HewlettPackard/gull.
 
 ## Master Source
 
-https://github.com/HewlettPackard/meadowlark
+https://github.com/HewlettPackard/meadowlark/tree/numa_radixtree
 
 ## Maturity
 Radix Tree is still in alpha state. The basic functionalities are working, but performance is
-not optimized. One limitation of the current implementation is that the key length is fixed and can
-only be tuned at compile time.
+not optimized. Known limitations: concurrency control is very simple (i.e., a single global lock),
+the garbage collection implementation is incomplete (i.e., nodes with no entries won't be garbage
+collected) and updateValue currently only correctly supports unique indexes (i.e., it will only
+update the first value for non-unique indexes).
 
-Radix Tree runs on both NUMA and FAME systems.
+While Radix Tree is designed to work on FAM, currently it only runs on NUMA systems.
 
 ## Dependencies
 
@@ -65,12 +68,10 @@ Radix Tree runs on both NUMA and FAME systems.
   $ sudo make install
   ```
 
-- Install [NVMM](https://github.com/HewlettPackard/gull/blob/master/README.md)
+- Install NVMM
 
   Radix Tree uses Non-Volatile Memory Manager (NVMM). Before building the radix tree, please
   download and build NVMM.
-
-- Setup [FAME](https://github.com/HewlettPackard/mdc-toolkit/blob/master/guide-FAME.md) if you want to try Radix Tree on top of FAM
 
 ## Build & Test
 
@@ -84,43 +85,29 @@ Radix Tree runs on both NUMA and FAME systems.
 
  ```
  $ cd $RADIXTREE
+ $ git checkout numa_radixtree
  ```
 
-3. Point build system to NVMM (assuming NVMM is already compiled with or without FAME support)
-   
-   Set the environment variable ${CMAKE_PREFIX_PATH} to include the 
-   paths to the NVMM header and library files. 
+3. Setup NVMM (assuming NVMM is already compiled)
 
-   For example, if NVMM is installed at /home/${USER}/projects/nvmm:
+ Please update NVMM_LIB_PATH in CMakeLists.txt with the NVMM path. For example,
+ if NVMM is located at /code/nvmm, then the following line in CMakeLists.txt,
 
-   ```
-   $ export CMAKE_PREFIX_PATH=/home/${USER}/projects/nvmm/include:/home/${USER}/projects/nvmm/build/src
-   ```
+ ```
+ set(NVMM_LIB_PATH "nvmm path" "/home/$ENV{USER}/projects/nvmm")
+ ```
+ should be changed to
+ ```
+ set(NVMM_LIB_PATH "nvmm path" "/code/nvmm")
+ ```
 
 4. Build
 
- On CC-NUMA systems:
-
  ```
  $ mkdir build
  $ cd build
- $ cmake .. -DFAME=OFF
+ $ cmake ..
  $ make
- ```
-
- On FAME:
-
- ```
- $ mkdir build
- $ cd build
- $ cmake .. -DFAME=ON
- $ make
- ```
-
- The default build type is Release. To switch between Release and Debug:
- ```
- $ cmake .. -DCMAKE_BUILD_TYPE=Release
- $ cmake .. -DCMAKE_BUILD_TYPE=Debug
  ```
 
 5. Test
@@ -130,45 +117,10 @@ Radix Tree runs on both NUMA and FAME systems.
  ```
  All tests should pass.
 
-## Demo on FAME
-
-There is a demo program that creates and destroys radix trees, and issue put/get/destroy/list
-commands to a radix tree, given its root. Below are the steps to run the demo:
-
-1. Setup [FAME](https://github.com/HewlettPackard/mdc-toolkit/blob/master/guide-FAME.md) with at least two nodes (e.g., node01 and node02)
-
-2. Install NVMM with FAME support on all nodes
-
-3. Install Radix Tree on all nodes at $RADIXTREE, with FAME support
-
-4. First log into one node, create a radix tree, and remember its root pointer ($ROOT_PTR):
-
- ```
- $ cd $RADIXTREE/build/demo
- $ ./demo_radix_tree 0 create_tree
- ```
-
-5. Then log into any node to exercise put/get/destroy/list commands. For example:
-
- Log into node01, put a pair of key value: a 1
-
- ```
- $ cd $NVMM/build/demo
- $ ./demo_radix_tree $ROOT_PTR put a 1
- $ ./demo_radix_tree $ROOT_PTR list
- ```
-
- Log into node02, get the value of key a:
- ```
- $ cd $NVMM/build/demo
- $ ./demo_radix_tree $ROOT_PTR list
- $ ./demo_radix_tree $ROOT_PTR get a
- ```
 
 ## Usage
 
-Please see demo/demo_radix_tree.cc
+Please see test/test_transaction.cc and test/test_radix_tree.cc
 
 ## Notes
-- There is another implementation of RadixTree at branch "numa_radixtree" whose FAM-support is still
-work in progress
+- FAM support is still work in progress

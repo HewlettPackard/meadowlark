@@ -1,24 +1,14 @@
 cmake_minimum_required(VERSION 2.8.12)
 project(radixtree)
 
-set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
-
-#
-# default system include and link directories
-#
-link_directories(/usr/lib)
-include_directories(/usr/include)
-link_directories(/usr/local/lib)
-include_directories(/usr/local/include)
-
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE "Release")
+endif()
 
 #
 # build type: Release (default) or Debug
 #
 message(STATUS "====================")
-if(NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE "Release")
-endif()
 if(CMAKE_BUILD_TYPE MATCHES Debug)
   message(STATUS "Build type: Debug")
 elseif(CMAKE_BUILD_TYPE MATCHES Release)
@@ -28,60 +18,6 @@ else()
   message(STATUS "Default to : Release")
   set(CMAKE_BUILD_TYPE "Release")
 endif()
-
-#
-# determine endianness at compile time
-#
-include(TestBigEndian)
-test_big_endian(result)
-if(${result})
-  add_definitions(-DSYS_BIG_ENDIAN)
-  message(STATUS "Current system is big-endian")
-else(${result})
-  add_definitions(-DSYS_LITTLE_ENDIAN)
-  message(STATUS "Current system is little-endian")
-endif(${result})
-
-#
-# determine tmpfs/lfs location
-#
-if(FAME) # FAME
-  add_definitions(-DFAME)
-  set(TMPFS_PATH "/lfs")
-  message(STATUS "LFS enabled")
-  message(STATUS "Lfs location: ${TMPFS_PATH}")
-else() # NUMA
-  set(TMPFS_PATH "/dev/shm")
-  message(STATUS "tmpfs location: ${TMPFS_PATH}")
-endif()
-
-#
-# determine shelf base dir. Used to store files backing the shelves
-#
-if(FAME)
-  set(SHELF_BASE_DIR "${TMPFS_PATH}")
-else()
-  set(SHELF_BASE_DIR "${TMPFS_PATH}/$ENV{USER}")
-endif()
-add_definitions(-DSHELF_USER="$ENV{USER}")
-add_definitions(-DSHELF_BASE_DIR="${SHELF_BASE_DIR}")
-message(STATUS "Shelf base dir: ${SHELF_BASE_DIR}")
-
-#
-# looking for pmem_invalidate()
-#
-find_library(NVML_PATH libpmem.so)
-execute_process (
-  COMMAND bash -c "readelf -a ${NVML_PATH} | grep pmem_invalidate"
-  OUTPUT_VARIABLE result
-  )
-if (result STREQUAL "")
-  add_definitions(-DPMEM_INVALIDATE_NOOP)
-  message(STATUS "libpmem: pmem_invalidate() is noop")
-else()
-  message(STATUS "libpmem: pmem_invalidate() is supported")
-endif()
-
 message(STATUS "====================")
 
 #
@@ -104,11 +40,78 @@ set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS}")
 #
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -DDEBUG -Og")
 
+
 #
-# header-files directory and library for nvmm
+# determine endianness at compile time
 #
-find_package(Nvmm REQUIRED)
-include_directories(${NVMM_INCLUDE_DIR})
+include(TestBigEndian)
+test_big_endian(result)
+if(${result})
+  add_definitions(-DSYS_BIG_ENDIAN)
+  message(STATUS "Current system is big-endian")
+else(${result})
+  add_definitions(-DSYS_LITTLE_ENDIAN)
+  message(STATUS "Current system is little-endian")
+endif(${result})
+
+#
+# determine tmpfs/lfs location
+#
+if(LFS)
+  set(TMPFS_PATH "/lfs")
+  add_definitions(-DLFS)
+  message(STATUS "WARNING: LFS enabled")
+  message(STATUS "lfs location: ${TMPFS_PATH}")
+else()
+  set(TMPFS_PATH "/dev/shm")
+  message(STATUS "tmpfs location: ${TMPFS_PATH}")
+endif()
+
+#
+# determine shelf base dir. Used to store files backing the shelves
+#
+if(LFS)
+  set(SHELF_BASE_DIR "${TMPFS_PATH}")
+else()
+  set(SHELF_BASE_DIR "${TMPFS_PATH}/$ENV{USER}")
+endif()
+add_definitions(-DSHELF_USER="$ENV{USER}")
+add_definitions(-DSHELF_BASE_DIR="${SHELF_BASE_DIR}")
+message(STATUS "Shelf base dir: ${SHELF_BASE_DIR}")
+
+#
+# default system include and link directories
+#
+link_directories(/usr/lib)
+include_directories(/usr/include)
+link_directories(/usr/local/lib)
+include_directories(/usr/local/include)
+
+#
+# include and link directories for nvmm
+#
+set(NVMM_LIB_PATH "nvmm path" "/home/$ENV{USER}/projects/nvmm")
+
+set(NVMM_LIB_INCLUDE "nvmm include" "${NVMM_LIB_PATH}/include")
+set(NVMM_LIB_LINK "nvmm lib" "${NVMM_LIB_PATH}/build/src")
+set(NVMM_LIB libnvmm.so)
+include_directories(${NVMM_LIB_INCLUDE})
+link_directories(${NVMM_LIB_LINK})
+
+#
+# looking for pmem_invalidate()
+#
+find_library(NVML_PATH libpmem.so)
+execute_process (
+  COMMAND bash -c "readelf -a ${NVML_PATH} | grep pmem_invalidate"
+  OUTPUT_VARIABLE result
+  )
+if (result STREQUAL "")
+  add_definitions(-DPMEM_INVALIDATE_NOOP)
+  message(STATUS "WARNING: pmem_invalidate() is noop")
+else()
+  message(STATUS "WARNING: pmem_invalidate() is supported")
+endif()
 
 #
 # add libpmem and lib_fam_atomic
@@ -158,19 +161,10 @@ add_subdirectory(src)
 #
 
 # create base shelf dir
-if(FAME) # FAME
-  add_custom_target(
-  radixtree_shelf_base_dir
-  COMMAND ${CMAKE_COMMAND} -E echo ${SHELF_BASE_DIR}
-  COMMENT show shelf base dir
-)
-else() # NUMA
-  add_custom_target(
+add_custom_target(
   radixtree_shelf_base_dir
   COMMAND ${CMAKE_COMMAND} -E make_directory ${SHELF_BASE_DIR}
-  COMMENT create shelf base dir
+  COMMENT create shelf base dir for nvmm
 )
-endif()
 
 add_subdirectory(test)
-add_subdirectory(demo)
