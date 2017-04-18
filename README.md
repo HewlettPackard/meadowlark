@@ -31,7 +31,8 @@ Radix Tree is still in alpha state. The basic functionalities are working, but p
 not optimized. One limitation of the current implementation is that the key length is fixed and can
 only be tuned at compile time.
 
-Radix Tree runs on both NUMA and FAME systems.
+Radix Tree runs on both NUMA and FAME ([Fabric-Attached Memory
+ Emulation](https://github.com/HewlettPackard/mdc-toolkit/blob/master/guide-FAME.md)) systems.
 
 ## Dependencies
 
