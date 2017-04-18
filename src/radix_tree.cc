@@ -109,7 +109,7 @@ void RadixTree::recursive_list(Gptr parent, std::function<void(const key_type&, 
         recursive_list(n->child[i], f);
 }
 
-bool RadixTree::put(const key_type& key, const int key_size, Gptr value) {
+Gptr RadixTree::put(const key_type& key, const int key_size, Gptr value) {
     assert(key_size>0 && key_size<=(int)sizeof(key_type));
 
     Gptr *p = NULL;
@@ -148,19 +148,41 @@ bool RadixTree::put(const key_type& key, const int key_size, Gptr value) {
                     heap->Free(new_leaf_ptr);
                     if (n->value != 0) {
                         // the key exists
-                        return false;
+                        //return false;
+
+                        // TODO: fam_atomic_write instead of cas?
+                        p = &n->value;
+                        q = *p;
+                        for(;;) {
+                            Gptr seen_q = cas64(p, q, value);
+                            if (seen_q == q) {
+                                return q;
+                            }
+                            q = seen_q;
+                        }
                     }
                     else {
                         // the key does not exist
                         // just update the value pointer
-                        p = &n->value;
-                        q = 0;
+                        // p = &n->value;
+                        // q = 0;
 
-                        Gptr seen_q = cas64(p, q, value);
-                        if (seen_q == q)
-                            return true;
-                        else
-                            return false;
+                        // Gptr seen_q = cas64(p, q, value);
+                        // if (seen_q == q)
+                        //     return true;
+                        // else
+                        //     return false;
+
+                        // TODO: fam_atomic_write instead of cas?
+                        p = &n->value;
+                        q = *p;
+                        for(;;) {
+                            Gptr seen_q = cas64(p, q, value);
+                            if (seen_q == q) {
+                                return q;
+                            }
+                            q = seen_q;
+                        }
                     }
                 }
                 else {
@@ -188,7 +210,8 @@ bool RadixTree::put(const key_type& key, const int key_size, Gptr value) {
             Gptr seen_q = cas64(p, q, new_leaf_ptr);
             if (seen_q == q) {
                 heap->Free(intermediate_node_ptr);
-                return true;
+                //return true;
+                return 0;
             }
             q = seen_q;
             continue;
@@ -229,7 +252,7 @@ bool RadixTree::put(const key_type& key, const int key_size, Gptr value) {
 
         Gptr seen_q = cas64(p, q, intermediate_node_ptr);
         if (seen_q == q)
-            return true;
+            return 0;
         q = seen_q;
     }
 }
@@ -278,6 +301,7 @@ Gptr RadixTree::destroy(const key_type& key, const int key_size) {
             return 0;
 
         if (n->prefix_size == key_size) {
+            // TODO: fam_atomic_write instead of cas?
             p = &n->value;
             q = *p;
             for(;;) {

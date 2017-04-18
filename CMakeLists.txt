@@ -102,12 +102,12 @@ set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS}")
 #
 # gcc flags for debug build
 #
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -DDEBUG -Og")
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -DDEBUG -Og -g")
 
 #
 # header-files directory and library for nvmm
 #
-find_package(Nvmm REQUIRED)
+find_package(NVMM REQUIRED)
 include_directories(${NVMM_INCLUDE_DIR})
 
 #

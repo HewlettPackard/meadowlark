@@ -22,65 +22,75 @@
  *
  */
 
-#ifndef RADIX_TREE_H
-#define RADIX_TREE_H
+#ifndef SPLIT_LIST_H
+#define SPLIT_LIST_H
 
+#include <cstdint>
 #include <functional>
 
-#include "nvmm/global_ptr.h"
 #include "nvmm/memory_manager.h"
 #include "nvmm/heap.h"
 
 namespace radixtree {
 
-using Gptr = nvmm::GlobalPtr;
-using Mmgr = nvmm::MemoryManager;
-using Heap = nvmm::Heap;
+typedef nvmm::GlobalPtr Gptr;
+typedef nvmm::MemoryManager Mmgr;
+typedef nvmm::Heap Heap;
 
-class RadixTree {
-
+class SplitOrderedList {
 public:
-
-    typedef unsigned char key_type[40];
+    typedef unsigned int Hash;
+    typedef uint64_t Key;
+    typedef uint64_t SoKey;
+    typedef uint64_t Value;
 
     // a radix tree is uniquely identified by the memory manager instance, the heap id, and the root pointer 
     // when Root=0, create a new radix tree with the provied memory manager and heap; get_root() will return the root pointer
     // when Root!=0, open an existing radix tree whose root pointer is Root, with the provied memory manager and heap
-    RadixTree(Mmgr *Mmgr, Heap *Heap, Gptr Root=0);
-    virtual ~RadixTree();
+    SplitOrderedList(Mmgr *Mmgr, Heap *Heap, Gptr sld=0);
 
-    // returns the root ptr of the radix tree
-    Gptr get_root();
+    virtual ~SplitOrderedList();
 
-    // returns 0 if the key did not exist
-    // returns old value if the key existed
-    Gptr put(const key_type& key, const int key_size, Gptr value);
+    // returns the descriptor ptr of the split list
+    Gptr get_descriptor();
+
+    int Insert(const Key& key, Value value);
 
     // returns 0 if not found
-    Gptr get(const key_type& key, const int key_size);
+    Value Find(const Key& key);
 
     // returns old value if any; caller owns it
-    Gptr destroy (const key_type& key, const int key_size);
+    int Delete(const Key& key, Gptr* ocurptr);
 
-    void list(std::function<void(const key_type&, const int, Gptr)> f);
+    void foreach(void (*f)(SplitOrderedList* so, SplitOrderedList::Key, SplitOrderedList::Value));
+
+
+    template<typename T>
+    T* toLocal(const Gptr &gptr) {
+        return (T*) mmgr_->GlobalToLocal(gptr);
+    }
 
 
 private:
     struct Node;
+    struct Descriptor;
 
-    Mmgr *mmgr;
-    Heap *heap;
-    Gptr root;
+    Mmgr *mmgr_;
+    Heap *heap_;
+    Descriptor* descriptor_;
+    Gptr descriptor_ptr_;
 
-    RadixTree(const RadixTree&);              // disable copying
-    RadixTree& operator=(const RadixTree&);   // disable assignment
+    SplitOrderedList(const SplitOrderedList&);              // disable copying
+    SplitOrderedList& operator=(const SplitOrderedList&);   // disable assignment
 
-    //***************************
-    // COMMON HELPERS           *
-    //***************************
-    // convert global address to local pointer
-    void* toLocal(const Gptr &gptr);
-    void recursive_list(Gptr parent, std::function<void(const key_type&, const int, Gptr)> f);
+    template<typename T>
+    Gptr toGlobal(T* ptr);
+
+    Value ListFind(Gptr *head_ptr, SoKey key, Gptr **oprev_ptr, Gptr  *ocur_ptr, Gptr  *onext_ptr);
+    int ListInsert(Gptr *head_ptr, Gptr node_ptr, Gptr *ocur_ptr);
+    int ListDelete(Gptr *head_ptr, SoKey key, Gptr* ocur_ptr);
+
+    void InitializeBucket (uint64_t bucket);
 };
 
 

@@ -20,11 +20,13 @@ atomically. Use of these atomics permits programs running on multiple non-cohere
 FAM environment to transactionally update the radix tree in a controlled fashion.
 
 Radix tree relies on the FAM-aware Non-Volatile Memory Manager (NVMM) library, which is available
-from https://github.com/HewlettPackard/gull.
+from https://github.hpe.com/labs/nvmm or https://github.com/HewlettPackard/gull.
 
 ## Master Source
 
-https://github.com/HewlettPackard/meadowlark
+https://github.hpe.com/labs/radixtree (internal)
+
+https://github.com/HewlettPackard/meadowlark (external)
 
 ## Maturity
 Radix Tree is still in alpha state. The basic functionalities are working, but performance is
@@ -65,17 +67,23 @@ Radix Tree runs on both NUMA and FAME systems.
   $ sudo make install
   ```
 
-- Install [NVMM](https://github.com/HewlettPackard/gull/blob/master/README.md)
+- Install NVMM
 
   Radix Tree uses Non-Volatile Memory Manager (NVMM). Before building the radix tree, please
   download and build NVMM.
 
-- Setup [FAME](https://github.com/HewlettPackard/mdc-toolkit/blob/master/guide-FAME.md) if you want to try Radix Tree on top of FAM
+- Setup [FAME](https://github.hpe.com/labs/mdc-toolkit/blob/master/guide-FAME.md) if you want to try Radix Tree on top of FAM
 
 ## Build & Test
 
 1. Download the source code:
 
+ Internal:
+ ```
+ $ git clone https://github.hpe.com/labs/radixtree.git
+ ```
+
+ External:
  ```
  $ git clone https://github.com/HewlettPackard/meadowlark.git
  ```
@@ -135,7 +143,7 @@ Radix Tree runs on both NUMA and FAME systems.
 There is a demo program that creates and destroys radix trees, and issue put/get/destroy/list
 commands to a radix tree, given its root. Below are the steps to run the demo:
 
-1. Setup [FAME](https://github.com/HewlettPackard/mdc-toolkit/blob/master/guide-FAME.md) with at least two nodes (e.g., node01 and node02)
+1. Setup [FAME](https://github.hpe.com/labs/mdc-toolkit/blob/master/guide-FAME.md) with at least two nodes (e.g., node01 and node02)
 
 2. Install NVMM with FAME support on all nodes
 

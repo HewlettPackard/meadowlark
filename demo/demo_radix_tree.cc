@@ -32,9 +32,9 @@
 #include "radixtree/radixtree_fam_atomic.h"
 #include "radixtree/radix_tree.h"
 
+#include "nvmm/epoch_manager.h"
 #include "nvmm/memory_manager.h"
 #include "nvmm/heap.h"
-#include "nvmm/root_shelf.h"
 
 using namespace radixtree;
 using namespace nvmm;
@@ -48,36 +48,27 @@ struct MyNode {
 
 void Init()
 {
-    // check if SHELF_BASE_DIR exists
-    std::cout << "Init: Checking if lfs exists..." << std::endl;
-    boost::filesystem::path shelf_base_path = boost::filesystem::path(SHELF_BASE_DIR);
-    if (boost::filesystem::exists(shelf_base_path) == false)
-    {
-        std::cout << "Init: LFS does not exist " << SHELF_BASE_DIR << std::endl;
-        exit(1);
-    }
+    EpochManager::Start();
+    MemoryManager::Start();
+}
 
-    // create a root shelf for MemoryManager if it does not exist
-    std::cout << "Init: Creating the root shelf if it does not exist..." << std::endl;
-    std::string root_shelf_file = std::string(SHELF_BASE_DIR) + "/" + SHELF_USER + "_NVMM_ROOT";
-    RootShelf root_shelf(root_shelf_file);
-    if(root_shelf.Exist() == false)
-    {
-        if(root_shelf.Create()!=NO_ERROR)
-        {
-            std::cout << "Init: Failed to create the root shelf file " << root_shelf_file << std::endl;
-            exit(1);
-        }
-    }
+GlobalPtr str2gptr(std::string root_str) {
+    std::string delimiter = ":";
+    size_t loc = root_str.find(delimiter);
+    if (loc==std::string::npos)
+        return 0;
+    std::string shelf_id = root_str.substr(1, loc-1);
+    std::string offset = root_str.substr(loc+1, root_str.size()-3-shelf_id.size());
+    return GlobalPtr((unsigned char)std::stoul(shelf_id), std::stoul(offset));
 }
 
 int main(int argc, char* argv[]) {
     if (argc < 3) {
-        fprintf(stderr, "example-radix-tree: usage: example-radix-tree root_ptr {create_tree,destroy_tree,get,put,destory,list} [<key> [<integer value>]]\n");
+        fprintf(stderr, "demo_radix_tree: usage: demo_radix_tree root_ptr {create_tree,destroy_tree,get,put,destory,list} [<key> [<integer value>]]\n");
         exit(1);
     }
     std::string root_str(argv[1]);
-    GlobalPtr root = std::stoul(root_str);
+    GlobalPtr root = str2gptr(std::string(root_str));
 
     std::string key;
     int64_t     my_value = 42;
@@ -92,10 +83,10 @@ int main(int argc, char* argv[]) {
     memset(&my_key, 0, sizeof(my_key));
     strcpy((char*)&my_key, key.c_str());
 
-
     // init memory manager and heap
     Init();
     ErrorCode ret;
+    EpochManager *em = EpochManager::GetInstance();
     MemoryManager *mm = MemoryManager::GetInstance();
     Heap *heap = mm->FindHeap(heap_id);
     if (heap==NULL) {
@@ -119,16 +110,17 @@ int main(int argc, char* argv[]) {
         assert(tree!=NULL);
         root = tree->get_root();
         // print out the root ptr
-        std::cout << "Created a radix tree; its root pointer is " << root.ToUINT64() << std::endl;
+        std::cout << "Created a radix tree; its root pointer is " << root << std::endl;
         delete tree;
         heap->Close();
         delete heap;
         return 0;
     }
     else if (command == "destroy_tree") {
-        heap->Free(root);
+        EpochOp op(em);
+        heap->Free(op, root);
         // print out the root ptr
-        std::cout << "Destroyed a radix tree; its root pointer is " << root.ToUINT64() << std::endl;
+        std::cout << "Destroyed a radix tree; its root pointer is " << root << std::endl;
         delete tree;
         heap->Close();
         delete heap;
@@ -137,7 +129,7 @@ int main(int argc, char* argv[]) {
 
     // handle 'put', 'get', 'destroy', and 'list'
     if (root == 0) {
-        std::cout << "Invalid root pointer " << root.ToUINT64() << std::endl;
+        std::cout << "Invalid root pointer " << root << std::endl;
         return -1;
     }
 
@@ -146,7 +138,7 @@ int main(int argc, char* argv[]) {
     tree = new RadixTree(mm, heap, root);
     assert(tree!=NULL);
     // print out the root ptr
-    std::cout << "Opened a radix tree; its root pointer is " << root.ToUINT64() << std::endl;
+    std::cout << "Opened a radix tree; its root pointer is " << root << std::endl;
 
     char c = command[0];
     switch (c) {
@@ -157,25 +149,42 @@ int main(int argc, char* argv[]) {
         else {
             MyNode* n = (MyNode*)mm->GlobalToLocal(result);
             pmem_invalidate(n, sizeof(n));
-            std::cout <<"  " << my_key << " -> " << n->my_value << std::endl;
+            std::cout <<"  " << my_key << " -> " << n->my_value << " " << result << std::endl;
+        }
+        break;
+    }
+
+    case 'h': {
+        EpochOp op(em);
+        GlobalPtr result = tree->get(my_key, (int)key.size());
+        if (result == 0)
+            std::cout << "  not found: " << my_key << std::endl;
+        else {
+            MyNode* n = (MyNode*)mm->GlobalToLocal(result);
+            pmem_invalidate(n, sizeof(n));
+            std::cout <<"  " << my_key << " -> " << n->my_value << " " << result << std::endl;
+            while(getchar()!='x') {
+                std::cout <<"  accessing " << result << ": " << n->my_value << std::endl;
+            }
         }
         break;
     }
 
     case 'p': {
-        GlobalPtr my_node_ptr = heap->Alloc(sizeof(MyNode));
-        std::cout << "  allocated memory at " << my_node_ptr << std::endl;
+        EpochOp op(em);
+        GlobalPtr my_node_ptr = heap->Alloc(op, sizeof(MyNode));
+        std::cout << "  allocated memory at " << my_node_ptr << " for value " << my_value << std::endl;
         MyNode* n = (MyNode*)mm->GlobalToLocal(my_node_ptr);
         n->my_value = my_value;
         pmem_persist(n, sizeof(n));
 
-        bool success = tree->put(my_key, (int)key.size(), my_node_ptr);
-        if (success)
-            std::cout << "  successfully inserted " << my_key << " = " << my_value << std::endl;
+        GlobalPtr result = tree->put(my_key, (int)key.size(), my_node_ptr);
+        if (result==0)
+            std::cout << "  successfully inserted " << my_key << " = " << my_value << " " << my_node_ptr << std::endl;
         else {
-            std::cout << "  failed to insert " <<  my_key << std::endl;
-            heap->Free(my_node_ptr);
-            std::cout << "  freed memory at " << my_node_ptr << std::endl;
+            std::cout << "  successfully updated " << my_key << " = " << my_value << " " << my_node_ptr << std::endl;
+            heap->Free(op, result);
+            std::cout << "  delayed free " << result << std::endl;
         }
         break;
     }
@@ -187,22 +196,35 @@ int main(int argc, char* argv[]) {
         else {
             MyNode* n = (MyNode*)mm->GlobalToLocal(result);
             pmem_invalidate(n, sizeof(n));
-            std::cout << "  " << my_key << " no longer = " << n->my_value << std::endl;
-            heap->Free(result);
-            std::cout << "  freed memory at " << result << std::endl;
+            std::cout << "  " << my_key << " no longer = " << n->my_value << " " << result << std::endl;
+            EpochOp op(em);
+            heap->Free(op, result);
+            std::cout << "  delayed free " << result << std::endl;
         }
         break;
     }
 
-    case 'l':
+    case 'l': {
         tree->list([&mm](const RadixTree::key_type key, const int key_size, GlobalPtr p) {
                 MyNode* n = (MyNode*)mm->GlobalToLocal(p);
                 pmem_invalidate(n, sizeof(n));
-                std::cout <<"  " << key << " -> " << n->my_value << std::endl;
+                std::cout <<"  " << key << " -> " << n->my_value << " " << p << std::endl;
             });
         break;
+    }
 
-
+    case 'm': {
+        while(1)
+        {
+            {
+                // Begin epoch in a new scope block so that we exit the epoch when we out of scope
+                // and don't block others when we then sleep.
+                EpochOp op(em);
+            }
+            usleep(100);
+        }
+        break;
+    }
     default:
         break;
     }

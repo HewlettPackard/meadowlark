@@ -28,45 +28,36 @@
 #include <string>
 #include <gtest/gtest.h>
 #include <boost/filesystem.hpp>
-#include <random>
 
 #include "radixtree/radixtree_libpmem.h"
 #include "radixtree/radixtree_fam_atomic.h"
-#include "radixtree/radix_tree.h"
+#include "radixtree/split_list.h"
 
 #include "nvmm/memory_manager.h"
 #include "nvmm/epoch_manager.h"
+#include "nvmm/log.h"
 #include "nvmm/heap.h"
 
 using namespace radixtree;
 using namespace nvmm;
 
-std::random_device r;
-std::default_random_engine e1(r());
-uint64_t rand_uint64(uint64_t min, uint64_t max)
+void print_kv(SplitOrderedList* so, SplitOrderedList::Key key, SplitOrderedList::Value val)
 {
-    std::uniform_int_distribution<uint64_t> uniform_dist(min, max);
-    return uniform_dist(e1);
+    Gptr val_ptr = val;
+    std::cout << key << ": " << val << std::endl;
 }
 
-std::string rand_string(size_t min_len, size_t max_len)
+void print_kv2(SplitOrderedList* so, SplitOrderedList::Key key, SplitOrderedList::Value val)
 {
-    static char const dict[] =
-        "0123456789"
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        "abcdefghijklmnopqrstuvwxyz";
-
-    size_t len = (size_t)rand_uint64(min_len, max_len);
-    std::string ret(len, '\0');
-    for (size_t i = 0; i < len; i++)
-    {
-        ret[i]=dict[rand_uint64(0,sizeof(dict)-2)];
+    Gptr val_ptr = val;
+    if (val != 0) {
+        std::cout << key << ": " << *so->toLocal<uint64_t>(val) << std::endl;
+    } else {
+        //std::cout << key << ": " << (void*) so->toLocal<uint64_t>(val) << std::endl;
     }
-
-    return ret;
 }
 
-TEST(RadixTree, SingleProcess) {
+TEST(SplitOrderedList, SingleProcess) {
     PoolId const heap_id = 1; // assuming we only use heap id 1
     size_t const heap_size = 1024*1024*1024; // 1024MB
 
@@ -81,26 +72,31 @@ TEST(RadixTree, SingleProcess) {
     EXPECT_EQ(NO_ERROR, heap->Open());
 
     // init the radix tree
-    RadixTree *tree = nullptr;
-    GlobalPtr root;
+    SplitOrderedList *so = nullptr;
+    GlobalPtr sod;
     // create a new radix tree
-    tree = new RadixTree(mm, heap);
-    root = tree->get_root();
-    EXPECT_NE(nullptr, tree);
-    delete tree;
+    so = new SplitOrderedList(mm, heap);
+    sod = so->get_descriptor();
+    EXPECT_NE(nullptr, so);
+    delete so;
 
     // open an existing radix tree
-    tree = new RadixTree(mm, heap, root);
-    EXPECT_NE(nullptr, tree);
+    so = new SplitOrderedList(mm, heap, sod);
+    EXPECT_NE(nullptr, so);
 
-    // test put, get, destroy
-    RadixTree::key_type key_buf;
-    int key_size;
-    memset(&key_buf, 0, sizeof(key_buf));
-    uint64_t key, value;
-    uint64_t *value_ptr;
-    GlobalPtr value_gptr, result, result_old;
+    so->Insert(0x9, 9);
+    so->Insert(0x10, 10);
+    so->Insert(0x11, 11);
 
+    delete so;
+
+    // open an existing radix tree
+    so = new SplitOrderedList(mm, heap, sod);
+    EXPECT_NE(nullptr, so);
+
+    so->foreach(print_kv);
+
+#if 0
     // get 1
     key = 1;
     key_size = sizeof(key);
@@ -126,31 +122,8 @@ TEST(RadixTree, SingleProcess) {
     *value_ptr = value;
     pmem_persist(value_ptr, sizeof(value));
 
-    result = tree->put(key_buf, key_size, value_gptr);
-    EXPECT_EQ(0UL, result);
-
-    // get 1
-    key = 1;
-    key_size = sizeof(key);
-    memcpy((char*)&key_buf, (char*)&key, key_size);
-    result = tree->get(key_buf, key_size);
-    EXPECT_EQ(value_gptr, result);
-    result_old = result;
-
-    // put 1:2
-    key = 1;
-    key_size = sizeof(key);
-    memcpy((char*)&key_buf, (char*)&key, key_size);
-
-    value = 1;
-    value_gptr = heap->Alloc(sizeof(value));
-    value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
-    *value_ptr = value;
-    pmem_persist(value_ptr, sizeof(value));
-
-    result = tree->put(key_buf, key_size, value_gptr);
-    EXPECT_EQ(result_old, result);
-    heap->Free(result);
+    success = tree->put(key_buf, key_size, value_gptr);
+    EXPECT_EQ(true, success);
 
     // get 1
     key = 1;
@@ -174,17 +147,15 @@ TEST(RadixTree, SingleProcess) {
     result = tree->get(key_buf, key_size);
     EXPECT_EQ(0UL, result);
 
-    delete tree;
+#endif
+    delete so;
 
     EXPECT_EQ(NO_ERROR, heap->Close());
     EXPECT_EQ(NO_ERROR, mm->DestroyHeap(heap_id));
 }
 
 // multi-process
-static int const process_count = 16;
-static int const loop_count = 5000;
-
-void DoWork(GlobalPtr root, PoolId heap_id)
+void DoWork(GlobalPtr descriptor, PoolId heap_id)
 {
     // =======================================================================
     // reset epoch manager after fork()
@@ -201,55 +172,50 @@ void DoWork(GlobalPtr root, PoolId heap_id)
     // open the heap
     EXPECT_EQ(NO_ERROR, heap->Open());
 
-    // init the radix tree
-    RadixTree *tree = nullptr;
-    tree = new RadixTree(mm, heap, root);
-    EXPECT_NE(nullptr, tree);
+    // init the split ordered list
+    SplitOrderedList *so = nullptr;
+    so = new SplitOrderedList(mm, heap, descriptor);
+    EXPECT_NE(nullptr, so);
 
     // =======================================================================
     // stress test
     pid_t pid = getpid();
 
-    RadixTree::key_type key_buf;
+    SplitOrderedList::Key key_buf;
+    int key_size;
     memset(&key_buf, 0, sizeof(key_buf));
-    std::string key;
-    size_t key_size;
-    std::string value;
-    size_t value_size;
+    uint64_t key, value;
     uint64_t *value_ptr;
     GlobalPtr value_gptr, result;
 
     GlobalPtr ptr;
-    for (int i=0; i<loop_count; i++)
+    int count = 500;
+    for (int i=0; i<count; i++)
     {
-        key = rand_string(1, sizeof(key_buf)-1);
-        key_size = key.size();
-        memcpy((char*)&key_buf, key.c_str(), key_size+1);
+        key = i;
+        key_size = sizeof(key);
+        memcpy((char*)&key_buf, (char*)&key, key_size);
 
-        value = rand_string(0, sizeof(key_buf)-1);
-        value_size = value.size();
-        value_gptr = heap->Alloc(value_size);
+        value = i;
+        value_gptr = heap->Alloc(sizeof(value));
         value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
-        memcpy((char*)value_ptr, value.c_str(), value_size+1);
-        pmem_persist(value_ptr, value_size+1);
+        *value_ptr = value;
+        pmem_persist(value_ptr, sizeof(value));
 
-        GlobalPtr result;
         int op=(i+pid)%3;
-        if (op==0)
-        {
-            result = tree->put(key_buf, (int)key_size, value_gptr);
-            if (result)
-                heap->Free(result);
+        if (op==0) {
+            EpochOp op(em);
+            so->Insert(key_buf, value_gptr);
         }
-        else if (op==1)
-        {
-            (void)tree->get(key_buf, (int)key_size);
+        else if (op==1) {
+            EpochOp op(em);
+            so->Find(key_buf);
         }
-        else
-        {
-            result = tree->destroy(key_buf, (int)key_size);
-            if (result)
-                heap->Free(result);
+        else {
+            EpochOp op(em);
+            Gptr cur_ptr;
+            so->Delete(key_buf, &cur_ptr);
+            heap->Free(op, cur_ptr);
         }
     }
     std::cout << pid << " DONE" << std::endl;
@@ -258,10 +224,11 @@ void DoWork(GlobalPtr root, PoolId heap_id)
     // close the heap
     EXPECT_EQ(NO_ERROR, heap->Close());
     delete heap;
-    delete tree;
+    delete so;
 }
 
-TEST(RadixTree, MultiProcessStress) {
+TEST(SplitOrderedList, MultiProcess) {
+    int const process_count = 16;
     PoolId const heap_id = 1; // assuming we only use heap id 1
     size_t const heap_size = 1024*1024*1024; // 1024MB
 
@@ -277,13 +244,13 @@ TEST(RadixTree, MultiProcessStress) {
     EXPECT_EQ(NO_ERROR, heap->Open());
 
     // init the radix tree
-    RadixTree *tree = nullptr;
-    GlobalPtr root;
+    SplitOrderedList *so = nullptr;
+    GlobalPtr sod;
     // create a new radix tree
-    tree = new RadixTree(mm, heap);
-    root = tree->get_root();
-    EXPECT_NE(nullptr, tree);
-    delete tree;
+    so = new SplitOrderedList(mm, heap);
+    sod = so->get_descriptor();
+    EXPECT_NE(nullptr, so);
+    delete so;
 
     // close the heap before reset epoch manager
     EXPECT_EQ(NO_ERROR, heap->Close());
@@ -304,7 +271,7 @@ TEST(RadixTree, MultiProcessStress) {
         if (pid[i]==0)
         {
             // child
-            DoWork(root, heap_id);
+            DoWork(sod, heap_id);
             exit(0); // this will leak memory (see valgrind output)
         }
         else
@@ -320,15 +287,13 @@ TEST(RadixTree, MultiProcessStress) {
         waitpid(pid[i], &status, 0);
     }
 
+    so = new SplitOrderedList(mm, heap, sod);
+    so->foreach(print_kv2);
+    delete so;
+
     // =======================================================================
     // destroy the heap
     EXPECT_EQ(NO_ERROR, mm->DestroyHeap(heap_id));
-    // tree = new RadixTree(mm, heap, root);
-    // tree->list([&mm](const RadixTree::key_type &key, const int key_size, GlobalPtr p) {
-    //         char *value = (char*)mm->GlobalToLocal(p);
-    //         std::cout <<"  " << std::string((const char*)&key, sizeof(key))  << " -> " << std::string(value) << std::endl;
-    //         });
-    // delete tree;
 
     // =======================================================================
     // reset epoch manager after fork() for the main process
@@ -336,8 +301,21 @@ TEST(RadixTree, MultiProcessStress) {
 }
 
 
-void Init()
+
+
+
+void InitTest(SeverityLevel level, bool to_console)
 {
+    // init boost::log
+    if (to_console == true)
+    {
+        nvmm::init_log(level, "");
+    }
+    else
+    {
+        nvmm::init_log(level, "mm.log");
+    }
+
     MemoryManager::Reset();
     MemoryManager::Start();
     EpochManager::Reset();
@@ -345,7 +323,7 @@ void Init()
 }
 
 int main (int argc, char** argv) {
-    Init();
+    InitTest(nvmm::debug, true);
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
