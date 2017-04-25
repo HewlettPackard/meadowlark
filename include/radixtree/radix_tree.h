@@ -26,6 +26,7 @@
 #define RADIX_TREE_H
 
 #include <functional>
+#include <stack>
 
 #include "nvmm/global_ptr.h"
 #include "nvmm/memory_manager.h"
@@ -40,8 +41,39 @@ using Heap = nvmm::Heap;
 class RadixTree {
 
 public:
+    struct Iter {
+        // info on the range query
+        std::string begin_key;
+        bool begin_key_inclusive;
+        bool begin_key_open;
+
+        std::string end_key;
+        bool end_key_inclusive;
+        bool end_key_open;
+
+        // current node
+        Gptr node; // == 0: range scan is done, no more valid keys
+        uint64_t next_pos; // the next value or child ptr to visit; 0: value; >0: pos-1 is the index of the key in the child array
+
+        // current key and value
+        std::string key; // current key
+        Gptr value; // current value
+
+        // traversal history
+        std::stack<std::pair<Gptr, uint64_t>> path;
+    };
 
     typedef unsigned char key_type[40];
+
+    // NOTE:
+    // - an open key (inf) == '\0' and exclusive
+    // - a regular key ("\0") == '\0' and inclusive
+    // - ['\0','\0'] => '\0'
+    // - ['\0','\0') => ['\0', +inf)
+    // - ('\0','\0'] => (-inf, '\0']
+    // - ('\0','\0') => (-inf, +inf)
+    static constexpr key_type OPEN_BOUNDARY_KEY = "\0";
+    static const size_t OPEN_BOUNDARY_KEY_SIZE = 1;
 
     // a radix tree is uniquely identified by the memory manager instance, the heap id, and the root pointer 
     // when Root=0, create a new radix tree with the provied memory manager and heap; get_root() will return the root pointer
@@ -64,8 +96,22 @@ public:
 
     void list(std::function<void(const key_type&, const int, Gptr)> f);
 
+    // for scan
+    // returns -1 if there is no key in range
+    int scan(Iter &iter,
+             key_type &key, int &key_size, Gptr &val,
+             const key_type& begin_key, const int begin_key_size, const bool begin_key_inclusive,
+             const key_type& end_key, const int end_key_size, const bool end_key_inclusive);
+
+    // return -1 if there is no next key
+    int get_next(Iter &iter,
+                 key_type& key, int& key_size, Gptr &val);
 
 private:
+    // when under high contention, current heap implementation may return 0 even if there is free
+    // space (false negative)
+    // our best option is to retry
+    static int const alloc_retry_cnt = 1000;
     struct Node;
 
     Mmgr *mmgr;
@@ -81,6 +127,8 @@ private:
     // convert global address to local pointer
     void* toLocal(const Gptr &gptr);
     void recursive_list(Gptr parent, std::function<void(const key_type&, const int, Gptr)> f);
+    bool lower_bound(Iter &iter);
+    bool next_value(Iter &iter);
 };
 
 

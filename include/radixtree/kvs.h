@@ -31,6 +31,7 @@
 
 namespace radixtree {
 
+// TODO: use std::string instead of buf + size?
 class KeyValueStore {
 public:
     virtual ~KeyValueStore(){};
@@ -39,6 +40,7 @@ public:
     static void Reset();
     static KeyValueStore *MakeKVS(int choice, nvmm::GlobalPtr location);
 
+    // insert if key does not exist; update if key exists
     virtual int Put (char const *key, size_t const key_len,
 		     char const *val, size_t const val_len) = 0;
 
@@ -47,9 +49,29 @@ public:
 
     virtual int Del (char const *key, size_t const key_len) = 0;
 
+    // scan APIs
+    virtual int Scan (int &iter_handle,
+                      char *key, size_t &key_len,
+                      char *val, size_t &val_len,
+                      char const *begin_key, size_t const begin_key_len,
+                      bool const begin_key_inclusive,
+                      char const *end_key, size_t const end_key_len,
+                      bool const end_key_inclusive){return -1;};
+
+    virtual int GetNext(int iter_handle,
+                        char *key, size_t &key_len,
+                        char *val, size_t &val_len){return -1;};
+
+    static constexpr const char *OPEN_BOUNDARY_KEY = "\0";
+    static constexpr const size_t OPEN_BOUNDARY_KEY_SIZE = 1;
+
+    // return the root global pointer of the kvs
     virtual nvmm::GlobalPtr Location () = 0;
 
+    // return max key len
     virtual size_t MaxKeyLen() = 0;
+
+    // return max value len
     virtual size_t MaxValLen() = 0;
 };
 

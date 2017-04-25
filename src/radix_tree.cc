@@ -23,6 +23,9 @@
  */
 
 #include <cstring>
+#include <string>
+#include <stack>
+#include <utility> // pair
 
 #include "nvmm/memory_manager.h"
 #include "nvmm/heap.h"
@@ -42,6 +45,7 @@ public:
     Gptr            value;
 };
 
+constexpr RadixTree::key_type RadixTree::OPEN_BOUNDARY_KEY;
 
 static inline
 Gptr cas64(Gptr* target, Gptr old_value, Gptr new_value) {
@@ -117,8 +121,8 @@ Gptr RadixTree::put(const key_type& key, const int key_size, Gptr value) {
 
     Gptr new_leaf_ptr = 0;
     Gptr intermediate_node_ptr = 0;
-    Node* intermediate_node;
-    int prefix_size, existing;
+    Node* intermediate_node=nullptr;
+    int prefix_size=0, existing=0;
     for (;;) {
         // Find current correct insertion point:
         while (q != 0) {
@@ -198,7 +202,10 @@ Gptr RadixTree::put(const key_type& key, const int key_size, Gptr value) {
         // no split but need to insert a new leaf node:
         if (q==0) {
             if (new_leaf_ptr==0) {
-                new_leaf_ptr = heap->Alloc(sizeof(Node));
+                int cnt=alloc_retry_cnt;
+                while(new_leaf_ptr==0 && (cnt--)>0)
+                    new_leaf_ptr = heap->Alloc(sizeof(Node));
+                assert(new_leaf_ptr.IsValid());
                 Node*    new_leaf     = (Node*)toLocal(new_leaf_ptr);
                 assert(new_leaf);
                 std::memcpy(&new_leaf->key, key, key_size);
@@ -220,7 +227,10 @@ Gptr RadixTree::put(const key_type& key, const int key_size, Gptr value) {
         // case 2:
         // split
         if (intermediate_node_ptr == 0) {
-            intermediate_node_ptr = heap->Alloc(sizeof(Node));
+            int cnt=alloc_retry_cnt;
+            while(intermediate_node_ptr==0 && (cnt--)>0)
+                intermediate_node_ptr = heap->Alloc(sizeof(Node));
+            assert(intermediate_node_ptr.IsValid());
             intermediate_node = (Node*)toLocal(intermediate_node_ptr);
             assert(intermediate_node);
             // we don't just copy the current common prefix because the prefix at this node may
@@ -234,7 +244,10 @@ Gptr RadixTree::put(const key_type& key, const int key_size, Gptr value) {
                 intermediate_node->value = value;
             else {
                 if (new_leaf_ptr==0) {
-                    new_leaf_ptr = heap->Alloc(sizeof(Node));
+                    int cnt=alloc_retry_cnt;
+                    while(new_leaf_ptr==0 && (cnt--)>0)
+                        new_leaf_ptr = heap->Alloc(sizeof(Node));
+                    assert(new_leaf_ptr.IsValid());
                     Node*   new_leaf     = (Node*)toLocal(new_leaf_ptr);
                     assert(new_leaf);
                     std::memcpy(&new_leaf->key, key, key_size);
@@ -320,6 +333,311 @@ Gptr RadixTree::destroy(const key_type& key, const int key_size) {
     return 0;
 }
 
+// find the next key within the requested range
+// find the next key that is less than (or equal to, if end_key_inclusive==true) the end key
+// returns true when a valid key is found
+bool RadixTree::next_value(Iter &iter) {
+    char const *key = iter.end_key.data();
+    int key_size = (int)iter.end_key.size();
 
+    // std::cout << "next_value: end_key " << key_size << std::endl;
+    // for(int i=0; i<key_size; i++) {
+    //     std::cout << (uint64_t)key[i] << " ";
+    // }
+    // std::cout << std::endl;
+
+    while (iter.node != 0) {
+        while (iter.next_pos == 257) {
+            if(iter.path.empty())
+                return false;
+            auto parent = iter.path.top();
+            iter.path.pop();
+            iter.node = parent.first;
+            iter.next_pos = parent.second+1+1;
+            //std::cout << "next_value going up at " << iter.next_pos-1 << std::endl;
+        }
+
+        Node* n = (Node*)toLocal(iter.node);
+        assert(n);
+        pmem_invalidate(n, sizeof(Node));
+
+        // std::cout << "next_value: current node key " << n->prefix_size << std::endl;
+        // for(int i=0; i<n->prefix_size; i++) {
+        //     std::cout << (uint64_t)n->key[i] << " ";
+        // }
+        // std::cout << std::endl;
+
+        // TODO: cache comparison result in iter?
+        int result;
+        if (iter.end_key_open)
+            result = 1;
+        else
+            result = memcmp(key, n->key, std::min(n->prefix_size, key_size));
+        if (result < 0) {
+            //std::cout << "next_value result < 0 " << std::endl;
+            return false;
+        }
+        else if (result > 0) {
+            //std::cout << "next_value result > 0 " << std::endl;
+            // every key in this subtree is valid
+            // so we go through all the child pointers
+
+            //std::cout << "next_value !!! next_pos " << iter.next_pos << std::endl;
+
+            // special case: check the value ptr
+            if(iter.next_pos == 0) {
+                //std::cout << "next_value checking value " << std::endl;
+                iter.next_pos++;
+                if (n->value) {
+                    iter.key = std::string((char*)&n->key, n->prefix_size);
+                    iter.value = n->value;
+                    return true;
+                }
+            }
+
+            // check the next child ptr
+            for(; iter.next_pos <=256; iter.next_pos++) {
+                //std::cout << "next_value checking ptr at " << iter.next_pos-1 << std::endl;
+                Gptr p = n->child[iter.next_pos-1];
+                if (p) {
+                    //std::cout << "next_value going down at " << iter.next_pos-1 << std::endl;
+                    iter.path.push(std::make_pair(iter.node, iter.next_pos-1));
+                    iter.node = p;
+                    iter.next_pos = 0;
+                    break;
+                }
+            }
+
+            // then we go up
+        }
+        else {
+            //std::cout << "next_value result == 0 " << std::endl;
+            // assert(result == 0);
+            if (n->prefix_size == key_size) {
+                iter.node = 0; // indicating there is no more valid keys
+                if (iter.end_key_inclusive) {
+                    // node->value would be the last valid key
+                    // so we just check the value ptr
+                    if(iter.next_pos == 0 && n->value) {
+
+                        iter.key = std::string((char*)&n->key, n->prefix_size);
+                        iter.value = n->value;
+                        return true;
+                    }
+                    return false;
+                }
+                else {
+                    return false;
+                }
+            }
+            else {
+                // assert(n->prefix_size < key_size);
+                // we check all child pointers up to key[n->prefix_size]
+
+                // special case: check the value ptr
+                if(iter.next_pos == 0) {
+                    iter.next_pos++;
+                    if (n->value) {
+                        iter.key = std::string((char*)&n->key, n->prefix_size);
+                        iter.value = n->value;
+                        return true;
+                    }
+                }
+                // check the next child ptr
+                uint64_t upper_bound = (uint64_t)key[n->prefix_size];
+                for(; iter.next_pos <= upper_bound+1; iter.next_pos++) {
+                    //std::cout << "next_value checking ptr at " << iter.next_pos-1 << std::endl;
+                    Gptr p = n->child[iter.next_pos-1];
+                    if (p) {
+                        //std::cout << "next_value going down at " << iter.next_pos-1 << std::endl;
+                        iter.path.push(std::make_pair(iter.node, iter.next_pos-1));
+                        iter.node = p;
+                        iter.next_pos = 0;
+                        break;
+                    }
+                }
+
+                if(iter.next_pos > upper_bound+1) {
+                    // then we are done!
+                    iter.node = 0;
+                    return false;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+
+
+
+// find the starting point for next_value() to get the first key within the requested range
+// find the first potential key that is greater than (or equal to, if begin_key_inclusive==true) the begin key
+bool RadixTree::lower_bound(Iter &iter) {
+    iter.node = root;
+    iter.next_pos = 0;
+    assert(iter.key.empty());
+    iter.value = 0;
+
+    char const *key = iter.begin_key.data();
+    int key_size = (int)iter.begin_key.size();
+    // std::cout << "lower_bound: begin_key " << key_size << std::endl;
+    // for(int i=0; i<key_size; i++) {
+    //     std::cout << (uint64_t)key[i] << " ";
+    // }
+    // std::cout << std::endl;
+
+    while (iter.node != 0) {
+        Node* n = (Node*)toLocal(iter.node);
+        assert(n);
+        pmem_invalidate(n, sizeof(Node));
+
+        // std::cout << "lower_bound !!! current node key " << n->prefix_size << std::endl;
+        // for(int i=0; i<n->prefix_size; i++) {
+        //     std::cout << (uint64_t)n->key[i] << " ";
+        // }
+        // std::cout << std::endl;
+
+        int result;
+        if (iter.begin_key_open)
+            result = -1;
+        else
+            result = memcmp(key, n->key, std::min(n->prefix_size, key_size));
+
+        if (result > 0) {
+            //std::cout << "lower_bound !!! result > 0 " << std::endl;
+            // oops, begin key > n->key
+            // we have to go up and the next node is our starting point
+            iter.next_pos = 257; // indicating we are done with this node and want to go up
+            return next_value(iter);
+        }
+        else if (result < 0) {
+            //std::cout << "lower_bound !!! result < 0 " << std::endl;
+            // begin key < n->key
+            // current node is our starting point
+            // assert(iter.next_pos == 0);
+            return next_value(iter);
+        }
+        else {
+            //std::cout << "lower_bound !!! result == 0 " << std::endl;
+            // assert(result == 0);
+            if (n->prefix_size == key_size) {
+                // begin key == n->key
+                if (iter.begin_key_inclusive) {
+                    // current node is our starting point
+                    // assert(iter.next_pos == 0);
+                    //std::cout << "lower_bound now !!!" << std::endl;
+                    return next_value(iter);
+                }
+                else {
+                    // the first child is our starting point
+                    iter.next_pos = 1;
+                    return next_value(iter);
+                }
+            }
+            else {
+                // assert(n->prefix_size < key_size);
+                unsigned char idx = key[n->prefix_size];
+                Gptr p = n->child[(uint)idx];
+                if (p) {
+                    // we have not yet found the starting point
+                    // keep going down
+                    //std::cout << "lower_bound !!! going down at " << (uint64_t)idx << std::endl;
+                    iter.path.push(std::make_pair(iter.node, idx));
+                    iter.node = p;
+                    continue;
+                }
+                else {
+                    // the next node is our starting point
+                    //std::cout << "lower_bound !!! next node " << (uint64_t)idx << std::endl;
+                    iter.next_pos = idx+1;
+                    return next_value(iter);
+                }
+            }
+        }
+    }
+    iter.node = 0;
+    return false;
+}
+
+int RadixTree::scan(Iter &iter,
+                    key_type &key, int &key_size, Gptr &val,
+                    const key_type& begin_key, const int begin_key_size, const bool begin_key_inclusive,
+                    const key_type& end_key, const int end_key_size, const bool end_key_inclusive) {
+    assert(begin_key_size>0 && begin_key_size<=(int)sizeof(key_type));
+    assert(end_key_size>0 && end_key_size<=(int)sizeof(key_type));
+
+    iter.node = 0;
+    iter.next_pos = 0;
+    iter.key.clear();
+    iter.value = 0;
+    {
+        std::stack<std::pair<Gptr, uint64_t>> tmp;
+        tmp.swap(iter.path);
+    }
+
+    //std::cout << ">>> scan " << std::endl;
+    static const std::string OPEN_BOUNDARY_STR =
+        std::string((char const *)&OPEN_BOUNDARY_KEY, OPEN_BOUNDARY_KEY_SIZE);
+    iter.begin_key = std::string((char const *)&begin_key, begin_key_size);
+    iter.begin_key_inclusive = begin_key_inclusive;
+
+    if (iter.begin_key == OPEN_BOUNDARY_STR && iter.end_key_inclusive == false) {
+        // a valid open begin key
+        iter.begin_key_open = true;
+        //std::cout << " open begin key" << std::endl;
+    }
+    else {
+        iter.begin_key_open = false;
+    }
+
+    iter.end_key = std::string((char const*)&end_key, end_key_size);
+    iter.end_key_inclusive = end_key_inclusive;
+
+    if (iter.end_key == OPEN_BOUNDARY_STR && iter.end_key_inclusive == false) {
+        // a valid open end key
+        iter.end_key_open = true;
+        //std::cout << " open end key" << std::endl;
+    }
+    else {
+        iter.end_key_open = false;
+    }
+
+    // point query
+    if (iter.begin_key == iter.end_key && begin_key_inclusive && end_key_inclusive) {
+        val = get(begin_key, begin_key_size);
+        if (val!=0) {
+            memcpy(key, begin_key, begin_key_size);
+            key_size = begin_key_size;
+            return 0;
+        }
+        else
+            return -1; // key not found
+    }
+
+    // range query
+    if ((iter.begin_key_open || iter.end_key_open) || (iter.begin_key < iter.end_key)) {
+        if(lower_bound(iter)) {
+            val = iter.value;
+            key_size = (int)iter.key.size();
+            memcpy((char*)(&key), iter.key.data(), key_size);
+            return 0;
+        }
+    }
+
+    return -1; // key not found
+}
+
+int RadixTree::get_next(Iter &iter, key_type& key, int &key_size, Gptr &val) {
+    //std::cout << ">>> get_next " << std::endl;
+    if(next_value(iter)) {
+        val = iter.value;
+        key_size = (int)iter.key.size();
+        memcpy((char*)(&key), iter.key.data(), key_size);
+        return 0;
+    }
+    return -1; // key not found
+}
 
 } // end namespace bold

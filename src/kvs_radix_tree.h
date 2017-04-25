@@ -28,6 +28,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <limits>
+#include <vector>
+#include <mutex>
 
 #include "nvmm/global_ptr.h"
 #include "nvmm/shelf_id.h"
@@ -61,6 +63,18 @@ public:
 
     int Del (char const *key, size_t const key_len);
 
+    int Scan (int &iter_handle,
+              char *key, size_t &key_len,
+              char *val, size_t &val_len,
+              char const *begin_key, size_t const begin_key_len,
+              bool const begin_key_inclusive,
+              char const *end_key, size_t const end_key_len,
+              bool const end_key_inclusive);
+
+    int GetNext(int iter_handle,
+                char *key, size_t &key_len,
+                char *val, size_t &val_len);
+
     Gptr Location () {return root_;}
 
     size_t MaxKeyLen() {return kMaxKeyLen;}
@@ -81,6 +95,13 @@ private:
 
     RadixTree *tree_;
     Gptr root_;
+
+    // TODO: remove mutex?
+    std::mutex mutex_;
+    // TODO: clean up used iters
+    //std::vector<RadixTree::Iter*> iters_;
+    std::deque<RadixTree::Iter*> iters_;
+
 
     int Open();
     int Close();

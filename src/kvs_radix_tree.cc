@@ -72,21 +72,21 @@ int KVSRadixTree::Open() {
     }
 
     // create/open the radixtree
-#ifdef DEBUG
-    if(!root_)
-        std::cout << "create a new radix tree: ";
-    else
-        std::cout << "open an existing radix tree: ";
-#endif
+// #ifdef DEBUG
+//     if(!root_)
+//         std::cout << "create a new radix tree: ";
+//     else
+//         std::cout << "open an existing radix tree: ";
+// #endif
     tree_ = new RadixTree(mmgr_, heap_, root_);
     if (!tree_) {
         delete heap_;
         return -1;
     }
     root_ = tree_->get_root();
-#ifdef DEBUG
-    std::cout << (uint64_t)root_ << std::endl;
-#endif
+// #ifdef DEBUG
+//     std::cout << (uint64_t)root_ << std::endl;
+// #endif
     return 0;
 }
 
@@ -95,9 +95,9 @@ int KVSRadixTree::Close() {
 
     // close the radix tree
     if (tree_) {
-#ifdef DEBUG
-        std::cout << "close the radix tree: " << root_;
-#endif
+// #ifdef DEBUG
+//         std::cout << "close the radix tree: " << root_;
+// #endif
         delete tree_;
         tree_ = nullptr;
     }
@@ -111,6 +111,11 @@ int KVSRadixTree::Close() {
         heap_ = nullptr;
     }
 
+    // delete all iters
+    for (auto iter:iters_) {
+        if (iter)
+            delete iter;
+    }
     return 0;
 }
 
@@ -139,22 +144,22 @@ int KVSRadixTree::Put (char const *key, size_t const key_len,
 
     val_gptr = tree_->put(key_buf, (int)key_len, val_gptr);
     if (val_gptr) {
-#ifdef DEBUG
-        std::cout << "  successfully updated "
-                  << std::string(key, key_len) << " = " << std::string(val, val_len);
-        ValBuf *val_ptr = (ValBuf*)mmgr_->GlobalToLocal(val_gptr);
-        std::cout << "  (old value " << std::string(val_ptr->val, val_ptr->size) << ")";
+// #ifdef DEBUG
+//         std::cout << "  successfully updated "
+//                   << std::string(key, key_len) << " = " << std::string(val, val_len);
+//         ValBuf *val_ptr = (ValBuf*)mmgr_->GlobalToLocal(val_gptr);
+//         std::cout << "  (old value " << std::string(val_ptr->val, val_ptr->size) << ")";
 
-        std::cout << std::endl;
-        std::cout << "  delayed free memory at " << val_gptr << std::endl;
-#endif
+//         std::cout << std::endl;
+//         std::cout << "  delayed free memory at " << val_gptr << std::endl;
+// #endif
         heap_->Free(op, val_gptr);
     }
     else {
-#ifdef DEBUG
-        std::cout << "  successfully inserted "
-                  << std::string(key, key_len) << " = " << std::string(val, val_len) << std::endl;
-#endif
+// #ifdef DEBUG
+//         std::cout << "  successfully inserted "
+//                   << std::string(key, key_len) << " = " << std::string(val, val_len) << std::endl;
+// #endif
     }
 
     return 0;
@@ -182,10 +187,10 @@ int KVSRadixTree::Get (char const *key, size_t const key_len,
         return -1;
     val_len = val_ptr->size;
     memcpy((char*)val, (char*)val_ptr->val, val_len);
-#ifdef DEBUG
-    std::cout << "  successfully fetched "
-              << std::string(key, key_len) << " -> " << std::string(val, val_len) << std::endl;
-#endif
+// #ifdef DEBUG
+//     std::cout << "  successfully fetched "
+//               << std::string(key, key_len) << " -> " << std::string(val, val_len) << std::endl;
+// #endif
     return 0;
 }
 
@@ -201,24 +206,128 @@ int KVSRadixTree::Del (char const *key, size_t const key_len) {
 
     Gptr val_gptr = tree_->destroy(key_buf, (int)key_len);
     if (val_gptr) {
-#ifdef DEBUG
-        std::cout << "  successfully deleted " << std::string(key, key_len);
-        ValBuf *val_ptr = (ValBuf*)mmgr_->GlobalToLocal(val_gptr);
-        std::cout << " = " << std::string(val_ptr->val, val_ptr->size);
+// #ifdef DEBUG
+//         std::cout << "  successfully deleted " << std::string(key, key_len);
+//         ValBuf *val_ptr = (ValBuf*)mmgr_->GlobalToLocal(val_gptr);
+//         std::cout << " = " << std::string(val_ptr->val, val_ptr->size);
 
-        std::cout << std::endl;
-        std::cout << "  delayed free memory at " << val_gptr << std::endl;
-#endif
+//         std::cout << std::endl;
+//         std::cout << "  delayed free memory at " << val_gptr << std::endl;
+// #endif
         heap_->Free(op, val_gptr);
         return 0;
     }
     else {
-#ifdef DEBUG
-        std::cout << "  not found: "
-                  << std::string(key, key_len) << std::endl;
-#endif
+// #ifdef DEBUG
+//         std::cout << "  not found: "
+//                   << std::string(key, key_len) << std::endl;
+// #endif
         return -1;
     }
+}
+
+int KVSRadixTree::Scan (
+    int &iter_handle,
+    char *key, size_t &key_len,
+    char *val, size_t &val_len,
+    char const *begin_key, size_t const begin_key_len,
+    bool const begin_key_inclusive,
+    char const *end_key, size_t const end_key_len,
+    bool const end_key_inclusive) {
+
+    if (begin_key_len > kMaxKeyLen || end_key_len > kMaxKeyLen)
+        return -1;
+    if (key_len > kMaxKeyLen)
+        return -1;
+    if (val_len > kMaxValLen)
+        return -1;
+
+    RadixTree::key_type begin_key_buf;
+    memset(&begin_key_buf, 0, sizeof(begin_key_buf));
+    memcpy((char*)&begin_key_buf, begin_key, begin_key_len);
+
+    RadixTree::key_type end_key_buf;
+    memset(&end_key_buf, 0, sizeof(end_key_buf));
+    memcpy((char*)&end_key_buf, end_key, end_key_len);
+
+    Eop op(emgr_);
+
+    RadixTree::key_type key_buf;
+    int key_buf_len = sizeof(key_buf);
+    memset(&key_buf, 0, sizeof(key_buf));
+    RadixTree::Iter *iter=new RadixTree::Iter();
+    Gptr val_gptr;
+    int ret = tree_->scan(*iter,
+                          key_buf, key_buf_len, val_gptr,
+                          begin_key_buf, (int)begin_key_len, begin_key_inclusive,
+                          end_key_buf, (int)end_key_len, end_key_inclusive);
+    if (ret!=0)
+        return -1; // TODO: better error codes
+
+    // copy key
+    key_len = key_buf_len;
+    memcpy((char*)key, (char*)key_buf, key_len);
+    // copy val
+    ValBuf *val_ptr = (ValBuf*)mmgr_->GlobalToLocal(val_gptr);
+    if(val_len < val_ptr->size)
+        return -1;
+    val_len = val_ptr->size;
+    memcpy((char*)val, (char*)val_ptr->val, val_len);
+// #ifdef DEBUG
+//     std::cout << "  SCAN: successfully fetched "
+//               << std::string(key, key_len) << " -> "
+//               << std::string(val, val_len)
+//               << std::endl;
+// #endif
+
+    // assign iter handle
+    std::lock_guard<std::mutex> lock(mutex_);
+    iters_.push_back(iter);
+    iter_handle = (int)(iters_.size()-1);
+    return 0;
+}
+
+int KVSRadixTree::GetNext(int iter_handle,
+                          char *key, size_t &key_len,
+                          char *val, size_t &val_len) {
+    if (key_len > kMaxKeyLen)
+        return -1;
+    if (val_len > kMaxValLen)
+        return -1;
+    if (iter_handle <0 || iter_handle >= (int)iters_.size())
+        return -1;
+
+    RadixTree::key_type key_buf;
+    int key_buf_len = sizeof(key_buf);
+    memset(&key_buf, 0, sizeof(key_buf));
+    Gptr val_gptr;
+
+    RadixTree::Iter *iter;
+    {
+        //std::lock_guard<std::mutex> lock(mutex_);
+        iter = iters_[iter_handle];
+    }
+    int ret = tree_->get_next(*iter,
+                              key_buf, key_buf_len, val_gptr);
+    if (ret!=0)
+        return -1; // TODO: better error codes
+
+    // copy key
+    key_len = key_buf_len;
+    memcpy((char*)key, (char*)key_buf, key_len);
+    // copy val
+    ValBuf *val_ptr = (ValBuf*)mmgr_->GlobalToLocal(val_gptr);
+    if(val_len < val_ptr->size)
+        return -1;
+    val_len = val_ptr->size;
+    memcpy((char*)val, (char*)val_ptr->val, val_len);
+// #ifdef DEBUG
+//     std::cout << "  GET_NEXT: successfully fetched "
+//               << std::string(key, key_len) << " -> "
+//               << std::string(val, val_len)
+//               << std::endl;
+// #endif
+    return 0;
 }
 
 } // namespace radixtree

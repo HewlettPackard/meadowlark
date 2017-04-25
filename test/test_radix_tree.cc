@@ -41,6 +41,7 @@
 using namespace radixtree;
 using namespace nvmm;
 
+// random number and string generator
 std::random_device r;
 std::default_random_engine e1(r());
 uint64_t rand_uint64(uint64_t min, uint64_t max)
@@ -66,6 +67,16 @@ std::string rand_string(size_t min_len, size_t max_len)
     return ret;
 }
 
+// endianness conversion for uint64_t
+inline uint64_t convert(uint64_t num) {
+#ifdef SYS_LITTLE_ENDIAN
+    num = __builtin_bswap64(num);
+#endif
+    return num;
+}
+
+
+// single process: put, get, destroy
 TEST(RadixTree, SingleProcess) {
     PoolId const heap_id = 1; // assuming we only use heap id 1
     size_t const heap_size = 1024*1024*1024; // 1024MB
@@ -180,7 +191,620 @@ TEST(RadixTree, SingleProcess) {
     EXPECT_EQ(NO_ERROR, mm->DestroyHeap(heap_id));
 }
 
-// multi-process
+
+// single process: scan
+TEST(RadixTree, SingleProcessScan) {
+    PoolId const heap_id = 1; // assuming we only use heap id 1
+    size_t const heap_size = 1024*1024*1024; // 1024MB
+
+    // init memory manager and heap
+    MemoryManager *mm = MemoryManager::GetInstance();
+    Heap *heap = nullptr;
+    EXPECT_EQ(NO_ERROR, mm->CreateHeap(heap_id, heap_size));
+    EXPECT_EQ(NO_ERROR, mm->FindHeap(heap_id, &heap));
+    EXPECT_NE(nullptr, heap);
+
+    // open the heap
+    EXPECT_EQ(NO_ERROR, heap->Open());
+
+    // init the radix tree
+    RadixTree *tree = nullptr;
+    GlobalPtr root;
+    // create a new radix tree
+    tree = new RadixTree(mm, heap);
+    root = tree->get_root();
+    EXPECT_NE(nullptr, tree);
+
+    // insert
+    RadixTree::key_type key_buf;
+    int key_size;
+    memset(&key_buf, 0, sizeof(key_buf));
+    uint64_t key, value;
+    uint64_t *value_ptr;
+    GlobalPtr value_gptr, result;
+
+    // insert '\0'
+    key_size = RadixTree::OPEN_BOUNDARY_KEY_SIZE;
+    memcpy((char*)&key_buf, (char const *)&RadixTree::OPEN_BOUNDARY_KEY, key_size);
+    value = '\0';
+    value_gptr = heap->Alloc(sizeof(value));
+    value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+    *value_ptr = value;
+    pmem_persist(value_ptr, sizeof(value));
+
+    result = tree->put(key_buf, key_size, value_gptr);
+    EXPECT_EQ(0UL, result);
+
+    // insert [5,499]
+    for(uint64_t i=5; i<500; i++) {
+        key = convert(i);
+        key_size = sizeof(key);
+        memcpy((char*)&key_buf, (char*)&key, key_size);
+
+        value = i;
+        value_gptr = heap->Alloc(sizeof(value));
+        value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+        *value_ptr = value;
+        pmem_persist(value_ptr, sizeof(value));
+
+        result = tree->put(key_buf, key_size, value_gptr);
+        EXPECT_EQ(0UL, result);
+    }
+
+    // scan
+    int ret;
+    RadixTree::key_type begin_key_buf, end_key_buf;
+    int begin_key_size, end_key_size;
+    memset(&begin_key_buf, 0, sizeof(begin_key_buf));
+    memset(&end_key_buf, 0, sizeof(end_key_buf));
+    uint64_t begin_key, end_key, begin_key_num, end_key_num;
+    RadixTree::Iter iter;
+
+    // 0 - 5
+    begin_key_num = 0;
+    end_key_num = 5;
+    begin_key = convert(begin_key_num);
+    end_key = convert(end_key_num);
+    begin_key_size = sizeof(begin_key);
+    end_key_size = sizeof(end_key);
+    memcpy((char*)&begin_key_buf, (char*)&begin_key, begin_key_size);
+    memcpy((char*)&end_key_buf, (char*)&end_key, end_key_size);
+
+    // scan [0, 5]
+    {
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, true,
+                         end_key_buf, end_key_size, true);
+        EXPECT_EQ(0, ret);
+        uint64_t i=end_key_num;
+        EXPECT_EQ(i, convert(*((uint64_t*)&key_buf)));
+        EXPECT_EQ((int)sizeof(i), key_size);
+        value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+        EXPECT_EQ(i, *value_ptr);
+
+        ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+        EXPECT_EQ(-1, ret);
+    }
+
+    // scan (0, 5]
+    {
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, false,
+                         end_key_buf, end_key_size, true);
+        EXPECT_EQ(0, ret);
+        uint64_t i=end_key_num;
+        EXPECT_EQ(i, convert(*((uint64_t*)&key_buf)));
+        EXPECT_EQ((int)sizeof(i), key_size);
+        value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+        EXPECT_EQ(i, *value_ptr);
+
+        ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+        EXPECT_EQ(-1, ret);
+    }
+
+    // scan [0, 5)
+    {
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, true,
+                         end_key_buf, end_key_size, false);
+        EXPECT_EQ(-1, ret);
+    }
+
+    // scan (0, 5)
+    {
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, true,
+                         end_key_buf, end_key_size, false);
+        EXPECT_EQ(-1, ret);
+    }
+
+    // 499 - 600
+    begin_key_num = 499;
+    end_key_num = 600;
+    begin_key = convert(begin_key_num);
+    end_key = convert(end_key_num);
+    begin_key_size = sizeof(begin_key);
+    end_key_size = sizeof(end_key);
+    memcpy((char*)&begin_key_buf, (char*)&begin_key, begin_key_size);
+    memcpy((char*)&end_key_buf, (char*)&end_key, end_key_size);
+
+    // scan [499, 600]
+    {
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, true,
+                         end_key_buf, end_key_size, true);
+        EXPECT_EQ(0, ret);
+        uint64_t i=begin_key_num;
+        EXPECT_EQ(i, convert(*((uint64_t*)&key_buf)));
+        EXPECT_EQ((int)sizeof(i), key_size);
+        value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+        EXPECT_EQ(i, *value_ptr);
+
+        ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+        EXPECT_EQ(-1, ret);
+    }
+
+    // scan (499, 600]
+    {
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, false,
+                         end_key_buf, end_key_size, true);
+        EXPECT_EQ(-1, ret);
+    }
+
+    // scan [499, 600)
+    {
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, true,
+                         end_key_buf, end_key_size, false);
+        EXPECT_EQ(0, ret);
+        uint64_t i=begin_key_num;
+        EXPECT_EQ(i, convert(*((uint64_t*)&key_buf)));
+        EXPECT_EQ((int)sizeof(i), key_size);
+        value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+        EXPECT_EQ(i, *value_ptr);
+
+        ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+        EXPECT_EQ(-1, ret);
+    }
+
+    // scan (499, 600)
+    {
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, false,
+                         end_key_buf, end_key_size, false);
+        EXPECT_EQ(-1, ret);
+    }
+
+
+    // 10 - 10
+    begin_key_num = 10;
+    end_key_num = 10;
+    begin_key = convert(begin_key_num);
+    end_key = convert(end_key_num);
+    begin_key_size = sizeof(begin_key);
+    end_key_size = sizeof(end_key);
+    memcpy((char*)&begin_key_buf, (char*)&begin_key, begin_key_size);
+    memcpy((char*)&end_key_buf, (char*)&end_key, end_key_size);
+
+    // scan [10, 10]
+    {
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, true,
+                         end_key_buf, end_key_size, true);
+        EXPECT_EQ(0, ret);
+        uint64_t i=begin_key_num;
+        EXPECT_EQ(i, convert(*((uint64_t*)&key_buf)));
+        EXPECT_EQ((int)sizeof(i), key_size);
+        value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+        EXPECT_EQ(i, *value_ptr);
+
+        ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+        EXPECT_EQ(-1, ret);
+    }
+
+    // scan (10, 10]
+    {
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, false,
+                         end_key_buf, end_key_size, true);
+        EXPECT_EQ(-1, ret);
+    }
+
+    // scan [10, 10)
+    {
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, true,
+                         end_key_buf, end_key_size, false);
+        EXPECT_EQ(-1, ret);
+    }
+
+    // scan (10, 10)
+    {
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, true,
+                         end_key_buf, end_key_size, false);
+        EXPECT_EQ(-1, ret);
+    }
+
+    // 10 - 100
+    begin_key_num = 10;
+    end_key_num = 100;
+    begin_key = convert(begin_key_num);
+    end_key = convert(end_key_num);
+    begin_key_size = sizeof(begin_key);
+    end_key_size = sizeof(end_key);
+    memcpy((char*)&begin_key_buf, (char*)&begin_key, begin_key_size);
+    memcpy((char*)&end_key_buf, (char*)&end_key, end_key_size);
+
+    // scan [10, 100]
+    {
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, true,
+                         end_key_buf, end_key_size, true);
+        EXPECT_EQ(0, ret);
+        uint64_t i=begin_key_num;
+        EXPECT_EQ(i, convert(*((uint64_t*)&key_buf)));
+        EXPECT_EQ((int)sizeof(i), key_size);
+        value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+        EXPECT_EQ(i, *value_ptr);
+
+        i++;
+        for(; i<=end_key_num; i++) {
+            ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+            EXPECT_EQ(0, ret);
+            EXPECT_EQ(i, convert(*((uint64_t*)&key_buf)));
+            EXPECT_EQ((int)sizeof(i), key_size);
+            value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+            EXPECT_EQ(i, *value_ptr);
+        }
+        ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+        EXPECT_EQ(-1, ret);
+    }
+
+    // scan [10, 100)
+    {
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, true,
+                         end_key_buf, end_key_size, false);
+        EXPECT_EQ(0, ret);
+        uint64_t i=begin_key_num;
+        EXPECT_EQ(i, convert(*((uint64_t*)&key_buf)));
+        EXPECT_EQ((int)sizeof(i), key_size);
+        value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+        EXPECT_EQ(i, *value_ptr);
+
+        i++;
+        for(; i<=end_key_num-1; i++) {
+            ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+            EXPECT_EQ(0, ret);
+            EXPECT_EQ(i, convert(*((uint64_t*)&key_buf)));
+            EXPECT_EQ((int)sizeof(i), key_size);
+            value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+            EXPECT_EQ(i, *value_ptr);
+        }
+        ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+        EXPECT_EQ(-1, ret);
+    }
+
+    // scan (10, 100]
+    {
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, false,
+                         end_key_buf, end_key_size, true);
+        EXPECT_EQ(0, ret);
+        uint64_t i=begin_key_num+1;
+        EXPECT_EQ(i, convert(*((uint64_t*)&key_buf)));
+        EXPECT_EQ((int)sizeof(i), key_size);
+        value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+        EXPECT_EQ(i, *value_ptr);
+
+        i++;
+        for(; i<=end_key_num; i++) {
+            ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+            EXPECT_EQ(0, ret);
+            EXPECT_EQ(i, convert(*((uint64_t*)&key_buf)));
+            EXPECT_EQ((int)sizeof(i), key_size);
+            value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+            EXPECT_EQ(i, *value_ptr);
+        }
+        ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+        EXPECT_EQ(-1, ret);
+    }
+
+    // scan (10, 100)
+    {
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, false,
+                         end_key_buf, end_key_size, false);
+        EXPECT_EQ(0, ret);
+        uint64_t i=begin_key_num+1;
+        EXPECT_EQ(i, convert(*((uint64_t*)&key_buf)));
+        EXPECT_EQ((int)sizeof(i), key_size);
+        value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+        EXPECT_EQ(i, *value_ptr);
+
+        i++;
+        for(; i<=end_key_num-1; i++) {
+            ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+            EXPECT_EQ(0, ret);
+            EXPECT_EQ(i, convert(*((uint64_t*)&key_buf)));
+            EXPECT_EQ((int)sizeof(i), key_size);
+            value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+            EXPECT_EQ(i, *value_ptr);
+        }
+        ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+        EXPECT_EQ(-1, ret);
+    }
+
+    // with open boundary
+    // scan [-inf, +inf] => not valid open boundaries  => scan ['\0','\0'] => '\0'
+    {
+        begin_key_size = RadixTree::OPEN_BOUNDARY_KEY_SIZE;
+        end_key_size = RadixTree::OPEN_BOUNDARY_KEY_SIZE;
+        memcpy((char*)&begin_key_buf, (char const *)&RadixTree::OPEN_BOUNDARY_KEY, begin_key_size);
+        memcpy((char*)&end_key_buf, (char const *)&RadixTree::OPEN_BOUNDARY_KEY, end_key_size);
+
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, true,
+                         end_key_buf, end_key_size, true);
+        EXPECT_EQ(0, ret);
+        EXPECT_EQ((int)RadixTree::OPEN_BOUNDARY_KEY_SIZE, key_size);
+        EXPECT_EQ(0, memcmp((char const *)&RadixTree::OPEN_BOUNDARY_KEY, (char *)key_buf, key_size));
+        EXPECT_EQ('\0', *((char*)mm->GlobalToLocal(value_gptr)));
+
+        ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+        EXPECT_EQ(-1, ret);
+    }
+
+    // with open boundary
+    // scan [-inf, +inf) => valid open boundary for end key => scan ['\0',+inf)
+    {
+        begin_key_num = 5;
+        end_key_num = 499;
+        begin_key_size = RadixTree::OPEN_BOUNDARY_KEY_SIZE;
+        end_key_size = RadixTree::OPEN_BOUNDARY_KEY_SIZE;
+        memcpy((char*)&begin_key_buf, (char const *)&RadixTree::OPEN_BOUNDARY_KEY, begin_key_size);
+        memcpy((char*)&end_key_buf, (char const *)&RadixTree::OPEN_BOUNDARY_KEY, end_key_size);
+
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, true,
+                         end_key_buf, end_key_size, false);
+        EXPECT_EQ(0, ret);
+        EXPECT_EQ((int)RadixTree::OPEN_BOUNDARY_KEY_SIZE, key_size);
+        EXPECT_EQ(0, memcmp((char const *)&RadixTree::OPEN_BOUNDARY_KEY, (char *)key_buf, key_size));
+        EXPECT_EQ('\0', *((char*)mm->GlobalToLocal(value_gptr)));
+
+        uint64_t i=begin_key_num;
+        for(; i<=end_key_num; i++) {
+            ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+            EXPECT_EQ(0, ret);
+            EXPECT_EQ(i, convert(*((uint64_t*)&key_buf)));
+            EXPECT_EQ((int)sizeof(i), key_size);
+            value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+            EXPECT_EQ(i, *value_ptr);
+        }
+        ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+        EXPECT_EQ(-1, ret);
+    }
+
+    // with open boundary
+    // scan (-inf, +inf] => valid open boundary for begin key => scan (-inf, '\0']
+    {
+        begin_key_size = RadixTree::OPEN_BOUNDARY_KEY_SIZE;
+        end_key_size = RadixTree::OPEN_BOUNDARY_KEY_SIZE;
+        memcpy((char*)&begin_key_buf, (char const *)&RadixTree::OPEN_BOUNDARY_KEY, begin_key_size);
+        memcpy((char*)&end_key_buf, (char const *)&RadixTree::OPEN_BOUNDARY_KEY, end_key_size);
+
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, false,
+                         end_key_buf, end_key_size, true);
+        EXPECT_EQ(0, ret);
+        EXPECT_EQ((int)RadixTree::OPEN_BOUNDARY_KEY_SIZE, key_size);
+        EXPECT_EQ(0, memcmp((char const *)&RadixTree::OPEN_BOUNDARY_KEY, (char *)key_buf, key_size));
+        EXPECT_EQ('\0', *((char*)mm->GlobalToLocal(value_gptr)));
+
+        ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+        EXPECT_EQ(-1, ret);
+    }
+
+    // with open boundary
+    // scan (-inf, +inf)
+    {
+        begin_key_num = 5;
+        end_key_num = 499;
+        begin_key_size = RadixTree::OPEN_BOUNDARY_KEY_SIZE;
+        end_key_size = RadixTree::OPEN_BOUNDARY_KEY_SIZE;
+        memcpy((char*)&begin_key_buf, (char const *)&RadixTree::OPEN_BOUNDARY_KEY, begin_key_size);
+        memcpy((char*)&end_key_buf, (char const *)&RadixTree::OPEN_BOUNDARY_KEY, end_key_size);
+
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, false,
+                         end_key_buf, end_key_size, false);
+        EXPECT_EQ(0, ret);
+        uint64_t i=begin_key_num;
+        EXPECT_EQ(i, convert(*((uint64_t*)&key_buf)));
+        EXPECT_EQ((int)sizeof(i), key_size);
+        value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+        EXPECT_EQ(i, *value_ptr);
+        i++;
+
+        for(; i<=end_key_num; i++) {
+            ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+            EXPECT_EQ(0, ret);
+            EXPECT_EQ(i, convert(*((uint64_t*)&key_buf)));
+            EXPECT_EQ((int)sizeof(i), key_size);
+            value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+            EXPECT_EQ(i, *value_ptr);
+        }
+        ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+        EXPECT_EQ(-1, ret);
+    }
+
+    // with open boundary
+    // scan (-inf, 100]
+    {
+        begin_key_num = 5;
+        end_key_num = 100;
+        end_key = convert(end_key_num);
+        begin_key_size = RadixTree::OPEN_BOUNDARY_KEY_SIZE;
+        end_key_size = sizeof(end_key);
+        memcpy((char*)&begin_key_buf, (char const *)&RadixTree::OPEN_BOUNDARY_KEY, begin_key_size);
+        memcpy((char*)&end_key_buf, (char*)&end_key, end_key_size);
+
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, false,
+                         end_key_buf, end_key_size, true);
+        EXPECT_EQ(0, ret);
+        EXPECT_EQ((int)RadixTree::OPEN_BOUNDARY_KEY_SIZE, key_size);
+        EXPECT_EQ(0, memcmp((char const *)&RadixTree::OPEN_BOUNDARY_KEY, (char *)key_buf, key_size));
+        EXPECT_EQ('\0', *((char*)mm->GlobalToLocal(value_gptr)));
+
+        uint64_t i=begin_key_num;
+        for(; i<=end_key_num; i++) {
+            ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+            EXPECT_EQ(0, ret);
+            EXPECT_EQ(i, convert(*((uint64_t*)&key_buf)));
+            EXPECT_EQ((int)sizeof(i), key_size);
+            value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+            EXPECT_EQ(i, *value_ptr);
+        }
+        ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+        EXPECT_EQ(-1, ret);
+    }
+
+    // with open boundary
+    // scan [10, +inf)
+    {
+        begin_key_num = 10;
+        end_key_num = 499;
+        begin_key = convert(begin_key_num);
+        begin_key_size = sizeof(begin_key);
+        end_key_size = RadixTree::OPEN_BOUNDARY_KEY_SIZE;
+        memcpy((char*)&begin_key_buf, (char*)&begin_key, begin_key_size);
+        memcpy((char*)&end_key_buf, (char const *)&RadixTree::OPEN_BOUNDARY_KEY, end_key_size);
+
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, true,
+                         end_key_buf, end_key_size, false);
+        EXPECT_EQ(0, ret);
+        uint64_t i=begin_key_num;
+        EXPECT_EQ(i, convert(*((uint64_t*)&key_buf)));
+        EXPECT_EQ((int)sizeof(i), key_size);
+        value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+        EXPECT_EQ(i, *value_ptr);
+        i++;
+
+        for(; i<=end_key_num; i++) {
+            ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+            EXPECT_EQ(0, ret);
+            EXPECT_EQ(i, convert(*((uint64_t*)&key_buf)));
+            EXPECT_EQ((int)sizeof(i), key_size);
+            value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+            EXPECT_EQ(i, *value_ptr);
+        }
+        ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+        EXPECT_EQ(-1, ret);
+    }
+
+    // with open boundary
+    // scan (-inf, 100)
+    {
+        begin_key_num = 5;
+        end_key_num = 100;
+        end_key = convert(end_key_num);
+        begin_key_size = RadixTree::OPEN_BOUNDARY_KEY_SIZE;
+        end_key_size = sizeof(end_key);
+        memcpy((char*)&begin_key_buf, (char const *)&RadixTree::OPEN_BOUNDARY_KEY, begin_key_size);
+        memcpy((char*)&end_key_buf, (char*)&end_key, end_key_size);
+
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, false,
+                         end_key_buf, end_key_size, false);
+        EXPECT_EQ(0, ret);
+        EXPECT_EQ((int)RadixTree::OPEN_BOUNDARY_KEY_SIZE, key_size);
+        EXPECT_EQ(0, memcmp((char const *)&RadixTree::OPEN_BOUNDARY_KEY, (char *)key_buf, key_size));
+        EXPECT_EQ('\0', *((char*)mm->GlobalToLocal(value_gptr)));
+
+        uint64_t i=begin_key_num;
+        for(; i<=end_key_num-1; i++) {
+            ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+            EXPECT_EQ(0, ret);
+            EXPECT_EQ(i, convert(*((uint64_t*)&key_buf)));
+            EXPECT_EQ((int)sizeof(i), key_size);
+            value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+            EXPECT_EQ(i, *value_ptr);
+        }
+        ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+        EXPECT_EQ(-1, ret);
+    }
+
+    // with open boundary
+    // scan (10, +inf)
+    {
+        begin_key_num = 10;
+        end_key_num = 499;
+        begin_key = convert(begin_key_num);
+        begin_key_size = sizeof(begin_key);
+        end_key_size = RadixTree::OPEN_BOUNDARY_KEY_SIZE;
+        memcpy((char*)&begin_key_buf, (char*)&begin_key, begin_key_size);
+        memcpy((char*)&end_key_buf, (char const *)&RadixTree::OPEN_BOUNDARY_KEY, end_key_size);
+
+        ret = tree->scan(iter,
+                         key_buf, key_size, value_gptr,
+                         begin_key_buf, begin_key_size, false,
+                         end_key_buf, end_key_size, false);
+        EXPECT_EQ(0, ret);
+        uint64_t i=begin_key_num+1;
+        EXPECT_EQ(i, convert(*((uint64_t*)&key_buf)));
+        EXPECT_EQ((int)sizeof(i), key_size);
+        value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+        EXPECT_EQ(i, *value_ptr);
+        i++;
+
+        for(; i<=end_key_num; i++) {
+            ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+            EXPECT_EQ(0, ret);
+            EXPECT_EQ(i, convert(*((uint64_t*)&key_buf)));
+            EXPECT_EQ((int)sizeof(i), key_size);
+            value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+            EXPECT_EQ(i, *value_ptr);
+        }
+        ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+        EXPECT_EQ(-1, ret);
+    }
+
+    // done!
+    delete tree;
+
+    EXPECT_EQ(NO_ERROR, heap->Close());
+    EXPECT_EQ(NO_ERROR, mm->DestroyHeap(heap_id));
+}
+
+// multi-process: put, get, destroy
 static int const process_count = 16;
 static int const loop_count = 5000;
 
@@ -210,10 +834,12 @@ void DoWork(GlobalPtr root, PoolId heap_id)
     // stress test
     pid_t pid = getpid();
 
-    RadixTree::key_type key_buf;
+    RadixTree::key_type key_buf, begin_key_buf, end_key_buf;
     memset(&key_buf, 0, sizeof(key_buf));
-    std::string key;
-    size_t key_size;
+    memset(&begin_key_buf, 0, sizeof(begin_key_buf));
+    memset(&end_key_buf, 0, sizeof(end_key_buf));
+    std::string key, begin_key, end_key;
+    int key_size, begin_key_size, end_key_size;
     std::string value;
     size_t value_size;
     uint64_t *value_ptr;
@@ -222,34 +848,62 @@ void DoWork(GlobalPtr root, PoolId heap_id)
     GlobalPtr ptr;
     for (int i=0; i<loop_count; i++)
     {
-        key = rand_string(1, sizeof(key_buf)-1);
-        key_size = key.size();
-        memcpy((char*)&key_buf, key.c_str(), key_size+1);
-
-        value = rand_string(0, sizeof(key_buf)-1);
-        value_size = value.size();
-        value_gptr = heap->Alloc(value_size);
-        value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
-        memcpy((char*)value_ptr, value.c_str(), value_size+1);
-        pmem_persist(value_ptr, value_size+1);
-
         GlobalPtr result;
-        int op=(i+pid)%3;
+        int op=(int)rand_uint64(0,3);
         if (op==0)
         {
-            result = tree->put(key_buf, (int)key_size, value_gptr);
+            key = rand_string(1, sizeof(key_buf)-1);
+            key_size =(int) key.size();
+            memcpy((char*)&key_buf, key.c_str(), key_size+1);
+
+            value = rand_string(0, sizeof(key_buf)-1);
+            value_size = value.size();
+            value_gptr = heap->Alloc(value_size);
+            value_ptr = (uint64_t*)mm->GlobalToLocal(value_gptr);
+            memcpy((char*)value_ptr, value.c_str(), value_size+1);
+            pmem_persist(value_ptr, value_size+1);
+
+            result = tree->put(key_buf, key_size, value_gptr);
             if (result)
                 heap->Free(result);
         }
         else if (op==1)
         {
-            (void)tree->get(key_buf, (int)key_size);
+            key = rand_string(1, sizeof(key_buf)-1);
+            key_size =(int) key.size();
+            memcpy((char*)&key_buf, key.c_str(), key_size+1);
+
+            (void)tree->get(key_buf, key_size);
+        }
+        else if (op==2)
+        {
+            key = rand_string(1, sizeof(key_buf)-1);
+            key_size = (int)key.size();
+            memcpy((char*)&key_buf, key.c_str(), key_size+1);
+
+            result = tree->destroy(key_buf, key_size);
+            if (result)
+                heap->Free(result);
         }
         else
         {
-            result = tree->destroy(key_buf, (int)key_size);
-            if (result)
-                heap->Free(result);
+            begin_key = rand_string(1, sizeof(begin_key_buf)-1);
+            begin_key_size = (int)begin_key.size();
+            memcpy((char*)&begin_key_buf, begin_key.c_str(), begin_key_size+1);
+
+            end_key = rand_string(1, sizeof(end_key_buf)-1);
+            end_key_size = (int)end_key.size();
+            memcpy((char*)&end_key_buf, end_key.c_str(), end_key_size+1);
+
+            RadixTree::Iter iter;
+            int ret = tree->scan(iter,
+                                 key_buf, key_size, value_gptr,
+                                 begin_key_buf, begin_key_size, true,
+                                 end_key_buf, end_key_size, true);
+            int cnt = (int)rand_uint64(0,100);
+            for(int i=0; ret==0 && i<cnt; i++) {
+                ret = tree->get_next(iter, key_buf, key_size, value_gptr);
+            }
         }
     }
     std::cout << pid << " DONE" << std::endl;
@@ -334,7 +988,6 @@ TEST(RadixTree, MultiProcessStress) {
     // reset epoch manager after fork() for the main process
     em->ResetAfterFork();
 }
-
 
 void Init()
 {
