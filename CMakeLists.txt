@@ -1,5 +1,9 @@
-cmake_minimum_required(VERSION 2.8.12)
+cmake_minimum_required(VERSION 2.8.11)
 project(radixtree)
+
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE "Release")
+endif()
 
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 
@@ -68,28 +72,61 @@ add_definitions(-DSHELF_BASE_DIR="${SHELF_BASE_DIR}")
 message(STATUS "Shelf base dir: ${SHELF_BASE_DIR}")
 
 #
-# looking for pmem_invalidate()
+# enable logging
 #
-find_library(NVML_PATH libpmem.so)
-execute_process (
-  COMMAND bash -c "readelf -a ${NVML_PATH} | grep pmem_invalidate"
-  OUTPUT_VARIABLE result
-  )
-if (result STREQUAL "")
-  add_definitions(-DPMEM_INVALIDATE_NOOP)
-  message(STATUS "libpmem: pmem_invalidate() is noop")
+if(LOG)
+  message(STATUS "logging: on")
+  add_definitions(-DPRINT_LOG)
 else()
-  message(STATUS "libpmem: pmem_invalidate() is supported")
+  message(STATUS "logging: off")
 endif()
 
+#
+# which implementation to use? PMEM=ON: pmem_invalidate + load; PMEM=OFF: fam_atomics
+#
+if(PMEM)
+  add_definitions(-DPMEM)
+  message(STATUS "implementation: use pmem")
+else()
+  message(STATUS "implementation: use fam_atomics")
+endif()
+
+#
+# enable metrics collection
+#
+if(METRICS)
+  add_definitions(-DMETRICS)
+  message(STATUS "Metrics enabled")
+else() # METRICS
+  message(STATUS "Metrics disabled")
+endif()
+
+#
+# add boost
+#
+set(BOOST_ROOT $ENV{BOOST_ROOT})
+find_package(Boost 1.55 COMPONENTS log log_setup thread system filesystem REQUIRED)
+if(Boost_FOUND)
+  include_directories(${Boost_INCLUDE_DIRS})
+  link_directories(${Boost_LIBRARY_DIR})
+  #message(STATUS "${Boost_INCLUDE_DIR}")
+  #message(STATUS "${Boost_LIBRARY_DIR}")       
+endif()
+
+
+# for boost::log
+add_definitions(-DBOOST_LOG_DYN_LINK)
+
+
 message(STATUS "====================")
+
 
 #
 # common gcc flags
 #
 set(CMAKE_CXX_FLAGS "-std=c++11")
 set(CMAKE_CXX_FLAGS
-  "${CMAKE_CXX_FLAGS} -Wall -W -Wextra -Wredundant-decls -Wunused -Wunused-macros -Wno-unused-parameter -Wcast-qual -Wcast-align -Wwrite-strings -Wmissing-field-initializers -Wendif-labels -Winit-self -Wlogical-op -Wpacked -Wstack-protector -Wformat=2 -Wswitch-enum -Wstrict-overflow=5 -Wpointer-arith -Wnormalized=nfc -Wno-long-long -Wswitch-default -Wconversion -Wunreachable-code")  
+  "${CMAKE_CXX_FLAGS} -Wall -W -Wextra -Wredundant-decls -Wunused -Wunused-macros -Wno-unused-parameter -Wcast-qual -Wcast-align -Wwrite-strings -Wmissing-field-initializers -Wendif-labels -Winit-self -Wlogical-op -Wpacked -Wstack-protector -Wformat=2 -Wswitch-enum -Wstrict-overflow=5 -Wpointer-arith -Wnormalized=nfc -Wno-long-long -Wconversion -Wunreachable-code")  
 
 # Flags that are currently not used: -Wshadow -Wpadded
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-invalid-offsetof ") # to suppress warnings about offsetof
@@ -97,23 +134,46 @@ set(CMAKE_CXX_FLAGS
 #
 # gcc flags for release build
 #
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS}")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -g -O2")
 
 #
 # gcc flags for debug build
 #
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -DDEBUG -Og -g")
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS} -DDEBUG -O0 -g")
 
 #
 # header-files directory and library for nvmm
 #
 find_package(NVMM REQUIRED)
 include_directories(${NVMM_INCLUDE_DIR})
+#link_directories(${NVMM_LIBRARY})
 
 #
-# add libpmem and lib_fam_atomic
+# add libpmem  
 #
-set(ARCH_LIBS pmem fam_atomic)
+find_package(Pmem REQUIRED)
+
+set(ARCH_LIBS ${ARCH_LIBS} ${PMEM_LIBRARY})
+
+if(NOT PMEM_HAS_PMEM_INVALIDATE)
+  add_definitions(-DPMEM_INVALIDATE_NOOP)
+endif()
+
+#
+# use libfam_atomic?
+#
+if(USE_FAM_ATOMIC)
+  message(STATUS "atomics library: FAM")
+  find_package(FamAtomic REQUIRED)
+  set(ARCH_LIBS ${ARCH_LIBS} ${FAM_ATOMIC_LIBRARY})
+else()
+  message(STATUS "atomics library: native")
+  add_definitions(-DFAM_ATOMIC_NATIVE)
+endif()
+# #
+# # add libpmem and lib_fam_atomic
+# #
+# set(ARCH_LIBS pmem fam_atomic)
 
 #
 # enable GTest
@@ -121,15 +181,6 @@ set(ARCH_LIBS pmem fam_atomic)
 enable_testing()
 #find_package(GTest REQUIRED)
 #include_directories(${GTEST_INCLUDE_DIR})
-
-#
-# enable boost
-#
-find_package(Boost 1.55 COMPONENTS log REQUIRED)
-
-
-# for boost::log
-add_definitions(-DBOOST_LOG_DYN_LINK)
 
 
 #
@@ -146,6 +197,11 @@ set(GTEST_ROOT ${PROJECT_SOURCE_DIR}/third-party/gtest)
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 add_subdirectory(third-party)
 include_directories(${PROJECT_SOURCE_DIR}/third-party/gtest/include)
+include_directories(${PROJECT_SOURCE_DIR}/third-party/cityhash/src)
+include_directories(${PROJECT_SOURCE_DIR}/third-party/medida-1a488e5/src/medida)
+include_directories(${PROJECT_SOURCE_DIR}/third-party/yaml-cpp-release-0.5.3/include)
+include_directories(${PROJECT_BINARY_DIR}/third-party/libmemcached-1.0.18/include)
+link_directories(${PROJECT_BINARY_DIR}/third-party/libmemcached-1.0.18/lib)
 
 #
 # add source code
@@ -173,4 +229,4 @@ else() # NUMA
 endif()
 
 add_subdirectory(test)
-add_subdirectory(demo)
+add_subdirectory(bin)

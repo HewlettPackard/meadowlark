@@ -27,10 +27,15 @@
 
 #include <functional>
 #include <stack>
+#include <utility> // pair
 
 #include "nvmm/global_ptr.h"
 #include "nvmm/memory_manager.h"
 #include "nvmm/heap.h"
+
+#include "radixtree/common.h"
+
+#include "radix_tree_metrics.h"
 
 namespace radixtree {
 
@@ -57,13 +62,13 @@ public:
 
         // current key and value
         std::string key; // current key
-        Gptr value; // current value
+        TagGptr value; // current value
 
         // traversal history
         std::stack<std::pair<Gptr, uint64_t>> path;
     };
 
-    typedef unsigned char key_type[40];
+    static const size_t MAX_KEY_LEN = 40;
 
     // NOTE:
     // - an open key (inf) == '\0' and exclusive
@@ -72,40 +77,86 @@ public:
     // - ['\0','\0') => ['\0', +inf)
     // - ('\0','\0'] => (-inf, '\0']
     // - ('\0','\0') => (-inf, +inf)
-    static constexpr key_type OPEN_BOUNDARY_KEY = "\0";
+    static constexpr char const * OPEN_BOUNDARY_KEY = "\0";
     static const size_t OPEN_BOUNDARY_KEY_SIZE = 1;
 
     // a radix tree is uniquely identified by the memory manager instance, the heap id, and the root pointer 
     // when Root=0, create a new radix tree with the provied memory manager and heap; get_root() will return the root pointer
     // when Root!=0, open an existing radix tree whose root pointer is Root, with the provied memory manager and heap
-    RadixTree(Mmgr *Mmgr, Heap *Heap, Gptr Root=0);
+    RadixTree(Mmgr *Mmgr, Heap *Heap, RadixTreeMetrics* Metrics, Gptr Root=0);
     virtual ~RadixTree();
 
     // returns the root ptr of the radix tree
     Gptr get_root();
 
-    // returns 0 if the key did not exist
-    // returns old value if the key existed
-    Gptr put(const key_type& key, const int key_size, Gptr value);
+    // returns 0 if the key does not exist (insert)
+    // returns old value if the key exists (update)
+    TagGptr put(const char * key, const size_t key_size, Gptr value);
 
     // returns 0 if not found
-    Gptr get(const key_type& key, const int key_size);
+    TagGptr get(const char * key, const size_t key_size);
 
+    // returns 0 if not found
     // returns old value if any; caller owns it
-    Gptr destroy (const key_type& key, const int key_size);
+    TagGptr destroy (const char * key, const size_t key_size);
 
-    void list(std::function<void(const key_type&, const int, Gptr)> f);
+    void list(std::function<void(const char*, const size_t, Gptr)> f);
+
+    void structure();
 
     // for scan
     // returns -1 if there is no key in range
     int scan(Iter &iter,
-             key_type &key, int &key_size, Gptr &val,
-             const key_type& begin_key, const int begin_key_size, const bool begin_key_inclusive,
-             const key_type& end_key, const int end_key_size, const bool end_key_inclusive);
+             char *key, size_t &key_size, TagGptr &value,
+             const char * begin_key, const size_t begin_key_size, const bool begin_key_inclusive,
+             const char * end_key, const size_t end_key_size, const bool end_key_inclusive);
 
     // return -1 if there is no next key
     int get_next(Iter &iter,
-                 key_type& key, int& key_size, Gptr &val);
+                 char * key, size_t& key_size, TagGptr &value);
+
+
+    /*
+      for consistent DRAM caching
+
+      NOTE:
+      - when we say "key did not exist", we mean the key NODE did not exist
+      - when we say "key was deleted", we mean the key NODE still exists but the value pointer was
+      set to null with a valid version number
+      - old_value is the previous value pointer in the key node before put or destroy, or null with
+      version 0 if the key node did not exist
+    */
+
+    // return <key ptr, new value ptr> for both insert and update
+    // old value ptr is returned through old_value
+    // old value ptr could be null with a valid version if the key was deleted or the key did not exist
+    // the key ptr will always be valid
+    std::pair<Gptr, TagGptr> putC(const char * key, const size_t key_size, Gptr value, TagGptr &old_value);
+
+    // return new value ptr for both insert and update
+    // old value ptr is returned through old_value
+    // old value ptr could be null with a valid version if the key was deleted
+    TagGptr putC(Gptr const key_ptr, Gptr value, TagGptr &old_value);
+
+    // return both key ptr and value ptr
+    // the value ptr will be null with a valid version if the key was deleted or the key did not exist
+    // the key ptr will be null if the key did not exist
+    std::pair<Gptr, TagGptr> getC(const char * key, const size_t key_size);
+
+    // return both key ptr and value ptr
+    // old value ptr could be null with a valid version if the key was deleted
+    TagGptr getC(Gptr const key_ptr);
+
+    // return both key ptr and new value ptr
+    // old value ptr is returned through old_value
+    // old value ptr could be null with a valid version if the key was deleted or the key did not exist
+    // the key ptr will be null if the key did not exist
+    std::pair<Gptr, TagGptr> destroyC(const char * key, const size_t key_size, TagGptr &old_value);
+
+    // return new value ptr
+    // old value ptr is returned through old_value
+    // old value ptr could be null with a valid version if the key was deleted
+    TagGptr destroyC(Gptr const key_ptr, TagGptr &old_value);
 
 private:
     // when under high contention, current heap implementation may return 0 even if there is free
@@ -113,9 +164,11 @@ private:
     // our best option is to retry
     static int const alloc_retry_cnt = 1000;
     struct Node;
+    struct TreeStructure;
 
     Mmgr *mmgr;
     Heap *heap;
+    RadixTreeMetrics *metrics;
     Gptr root;
 
     RadixTree(const RadixTree&);              // disable copying
@@ -126,7 +179,8 @@ private:
     //***************************
     // convert global address to local pointer
     void* toLocal(const Gptr &gptr);
-    void recursive_list(Gptr parent, std::function<void(const key_type&, const int, Gptr)> f);
+    void recursive_list(Gptr parent, std::function<void(const char*, const size_t, Gptr)> f, uint64_t &level, uint64_t &depth, uint64_t &value_cnt, uint64_t &node_cnt);
+    void recursive_structure(Gptr parent, int level, TreeStructure& structure);
     bool lower_bound(Iter &iter);
     bool next_value(Iter &iter);
 };

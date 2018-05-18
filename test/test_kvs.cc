@@ -27,18 +27,21 @@
 #include <string.h>
 #include <string>
 #include <gtest/gtest.h>
-#include <boost/filesystem.hpp>
 #include <random>
+#include <limits>
 
-#include "radixtree/radixtree_libpmem.h"
-#include "radixtree/radixtree_fam_atomic.h"
 #include "radixtree/kvs.h"
 
 #include "nvmm/memory_manager.h"
 #include "nvmm/epoch_manager.h"
+#include "nvmm/fam.h"
 
 using namespace radixtree;
 using namespace nvmm;
+
+
+//KeyValueStore::IndexType const KVSTYPE = KeyValueStore::RADIX_TREE_TINY;
+KeyValueStore::IndexType const KVSTYPE = KeyValueStore::RADIX_TREE;
 
 std::random_device r;
 std::default_random_engine e1(r());
@@ -73,6 +76,14 @@ inline uint64_t convert(uint64_t num) {
     return num;
 }
 
+inline std::string num2str(uint64_t num) {
+#ifdef SYS_LITTLE_ENDIAN
+    num = __builtin_bswap64(num);
+#endif
+    return std::string((char*)&num, sizeof(num));
+}
+
+
 inline void ResetBuf(char *buf, size_t &len, size_t const max_len) {
     memset(buf, 0, max_len);
     len=max_len;
@@ -82,17 +93,19 @@ TEST(KeyValueStore, SingleProcess) {
     KeyValueStore *kvs;
 
     // create a new radix tree
-    kvs = KeyValueStore::MakeKVS(0, 0);
+    kvs = KeyValueStore::MakeKVS(KVSTYPE, 0);
     EXPECT_NE(nullptr, kvs);
     GlobalPtr root = kvs->Location();
     delete kvs;
 
     // open an existing radix tree
-    kvs = KeyValueStore::MakeKVS(0, root);
+    kvs = KeyValueStore::MakeKVS(KVSTYPE, root);
     EXPECT_NE(nullptr, kvs);
 
+
     // test put, get, del
-    size_t const max_val_len = 1024;
+    size_t const min_val_len = kvs->MaxValLen()<1024?kvs->MaxValLen():0;
+    size_t const max_val_len = kvs->MaxValLen()<1024?kvs->MaxValLen():1024;
     EXPECT_GE(kvs->MaxValLen(), max_val_len);
     char val_buf[max_val_len];
     size_t val_len;
@@ -104,17 +117,17 @@ TEST(KeyValueStore, SingleProcess) {
     // get 1
     key = "1";
     ret = kvs->Get(key.c_str(), key.size(), val_buf, val_len);
-    EXPECT_EQ(-1, ret);
+    EXPECT_EQ(-2, ret);
     ResetBuf(val_buf, val_len, max_val_len);
 
     // del 1
     key = "1";
     ret = kvs->Del(key.c_str(), key.size());
-    EXPECT_EQ(-1, ret);
+    EXPECT_EQ(-2, ret);
 
-    // put 1:a
+    // put 1
     key = "1";
-    val = "a";
+    val = rand_string(min_val_len, max_val_len);
     ret = kvs->Put(key.c_str(), key.size(), val.c_str(), val.size());
     EXPECT_EQ(0, ret);
 
@@ -125,9 +138,9 @@ TEST(KeyValueStore, SingleProcess) {
     EXPECT_EQ(val, std::string(val_buf, val_len));
     ResetBuf(val_buf, val_len, max_val_len);
 
-    // put 1:b
+    // put 1
     key = "1";
-    val = "b";
+    val = rand_string(min_val_len, max_val_len);
     ret = kvs->Put(key.c_str(), key.size(), val.c_str(), val.size());
     EXPECT_EQ(0, ret);
 
@@ -146,7 +159,137 @@ TEST(KeyValueStore, SingleProcess) {
     // get 1
     key = "1";
     ret = kvs->Get(key.c_str(), key.size(), val_buf, val_len);
-    EXPECT_EQ(-1, ret);
+    EXPECT_EQ(-2, ret);
+    ResetBuf(val_buf, val_len, max_val_len);
+
+    delete kvs;
+}
+
+TEST(KeyValueStore, SingleProcessCachingAPI) {
+    KeyValueStore *kvs;
+
+    // create a new radix tree
+    kvs = KeyValueStore::MakeKVS(KVSTYPE, 0);
+    EXPECT_NE(nullptr, kvs);
+    GlobalPtr root = kvs->Location();
+    delete kvs;
+
+    // open an existing radix tree
+    kvs = KeyValueStore::MakeKVS(KVSTYPE, root);
+    EXPECT_NE(nullptr, kvs);
+
+    // test put, get, del
+    size_t const min_val_len = kvs->MaxValLen()<1024?kvs->MaxValLen():0;
+    size_t const max_val_len = kvs->MaxValLen()<1024?kvs->MaxValLen():1024;
+    EXPECT_GE(kvs->MaxValLen(), max_val_len);
+    char val_buf[max_val_len];
+    size_t val_len;
+    ResetBuf(val_buf, val_len, max_val_len);
+
+    std::string key, val;
+    int ret;
+    Gptr key_ptr, old_key_ptr;
+    TagGptr val_ptr, old_val_ptr;
+
+    // get 1
+    key = "1";
+    ret = kvs->Get(key.c_str(), key.size(), val_buf, val_len, key_ptr, val_ptr);
+    EXPECT_EQ(0, ret);
+    EXPECT_FALSE(key_ptr.IsValid());
+    ResetBuf(val_buf, val_len, max_val_len);
+
+    // del 1
+    key = "1";
+    ret = kvs->Del(key.c_str(), key.size(), key_ptr, val_ptr);
+    EXPECT_EQ(0, ret);
+    EXPECT_FALSE(key_ptr.IsValid());
+
+    // put 1
+    key = "1";
+    val = rand_string(min_val_len, max_val_len);
+    ret = kvs->Put(key.c_str(), key.size(), val.c_str(), val.size());
+    EXPECT_EQ(0, ret);
+
+    // get 1
+    key = "1";
+    ret = kvs->Get(key.c_str(), key.size(), val_buf, val_len, key_ptr, val_ptr);
+    EXPECT_EQ(0, ret);
+    EXPECT_TRUE(key_ptr.IsValid());
+    EXPECT_TRUE(val_ptr.IsValid());
+    EXPECT_EQ(val, std::string(val_buf, val_len));
+    ResetBuf(val_buf, val_len, max_val_len);
+
+    // get 1
+    // val_ptr is up-to-date
+    old_val_ptr=val_ptr;
+    key = "1";
+    ret = kvs->Get(key_ptr, val_ptr, val_buf, val_len);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(old_val_ptr, val_ptr);
+    ResetBuf(val_buf, val_len, max_val_len);
+
+    // put 1
+    old_key_ptr=key_ptr;
+    old_val_ptr=val_ptr;
+    key = "1";
+    val = rand_string(min_val_len, max_val_len);
+    ret = kvs->Put(key.c_str(), key.size(), val.c_str(), val.size(), key_ptr, val_ptr);
+    EXPECT_EQ(0, ret);
+    EXPECT_TRUE(key_ptr.IsValid());
+    EXPECT_TRUE(val_ptr.IsValid());
+    EXPECT_EQ(old_key_ptr, key_ptr);
+    EXPECT_EQ(old_val_ptr.tag()+1, val_ptr.tag());
+
+    // put 1
+    old_key_ptr=key_ptr;
+    old_val_ptr=val_ptr;
+    key = "1";
+    val = rand_string(min_val_len, max_val_len);
+    ret = kvs->Put(key_ptr, val_ptr, val.c_str(), val.size());
+    EXPECT_EQ(0, ret);
+    EXPECT_TRUE(key_ptr.IsValid());
+    EXPECT_TRUE(val_ptr.IsValid());
+    EXPECT_EQ(old_key_ptr, key_ptr);
+    EXPECT_EQ(old_val_ptr.tag()+1, val_ptr.tag());
+
+    // get 1
+    // val_ptr is up-to-date
+    // old_val_ptr is not up-to-date
+    EXPECT_EQ(old_val_ptr.tag()+1, val_ptr.tag());
+    key = "1";
+    ret = kvs->Get(key_ptr, old_val_ptr, val_buf, val_len);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(val, std::string(val_buf, val_len));
+    EXPECT_EQ(old_val_ptr, val_ptr);
+    ResetBuf(val_buf, val_len, max_val_len);
+
+
+    // del 1:c
+    old_key_ptr=key_ptr;
+    old_val_ptr=val_ptr;
+    key = "1";
+    ret = kvs->Del(key.c_str(), key.size(), key_ptr, val_ptr);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(old_key_ptr, key_ptr);
+    EXPECT_EQ(old_val_ptr.tag()+1, val_ptr.tag());
+    EXPECT_FALSE(val_ptr.gptr().IsValid());
+
+    // del 1 again
+    old_key_ptr=key_ptr;
+    old_val_ptr=val_ptr;
+    ret = kvs->Del(key_ptr, val_ptr);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(old_key_ptr, key_ptr);
+    EXPECT_EQ(old_val_ptr.tag()+1, val_ptr.tag());
+    EXPECT_FALSE(val_ptr.gptr().IsValid());
+
+    // get 1
+    old_key_ptr=key_ptr;
+    old_val_ptr=val_ptr;
+    ret = kvs->Get(key_ptr, val_ptr, val_buf, val_len);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(old_key_ptr, key_ptr);
+    EXPECT_EQ(old_val_ptr, val_ptr);
     ResetBuf(val_buf, val_len, max_val_len);
 
     delete kvs;
@@ -156,11 +299,13 @@ TEST(KeyValueStore, SingleProcessScan) {
     KeyValueStore *kvs;
 
     // create a new radix tree
-    kvs = KeyValueStore::MakeKVS(0, 0);
+    kvs = KeyValueStore::MakeKVS(KVSTYPE, 0);
     EXPECT_NE(nullptr, kvs);
 
-    size_t const max_val_len = 40;
+    size_t const max_val_len = kvs->MaxValLen()<1024?kvs->MaxValLen():1024;
     size_t const max_key_len = kvs->MaxKeyLen();
+
+    uint64_t const OPEN = 12345;
 
     // insert
     {
@@ -168,14 +313,13 @@ TEST(KeyValueStore, SingleProcessScan) {
         int ret;
 
         key = std::string(KeyValueStore::OPEN_BOUNDARY_KEY, KeyValueStore::OPEN_BOUNDARY_KEY_SIZE);
-        val = "OPEN";
+        val = num2str(OPEN);
         ret = kvs->Put(key.c_str(), key.size(), val.c_str(), val.size());
         EXPECT_EQ(0, ret);
 
         for(uint64_t i=5; i<500; i++) {
-            uint64_t num = convert(i);
-            key = std::string((char*)&num, sizeof(num));
-            val = std::to_string(i);
+            key = num2str(i);
+            val = num2str(i);
             ret = kvs->Put(key.c_str(), key.size(), val.c_str(), val.size());
             EXPECT_EQ(0, ret);
         }
@@ -185,10 +329,8 @@ TEST(KeyValueStore, SingleProcessScan) {
     {
         uint64_t begin_key_num = 0;
         uint64_t end_key_num = 5;
-        uint64_t begin_key_buf = convert(begin_key_num);
-        uint64_t end_key_buf = convert(end_key_num);
-        std::string begin_key((char*)&begin_key_buf, sizeof(begin_key_buf));
-        std::string end_key((char*)&end_key_buf, sizeof(end_key_buf));
+        std::string begin_key=num2str(begin_key_num);
+        std::string end_key=num2str(end_key_num);
 
         char key_buf[max_key_len];
         size_t key_len;
@@ -205,25 +347,23 @@ TEST(KeyValueStore, SingleProcessScan) {
                             end_key.c_str(), end_key.size(), true);
         EXPECT_EQ(0, ret);
 
-        uint64_t key = convert(end_key_num);
-        EXPECT_EQ(key, *((uint64_t*)key_buf));
-        std::string val = std::to_string(end_key_num);
+        std::string key = num2str(end_key_num);
+        EXPECT_EQ(key, std::string(key_buf, key_len));
+        std::string val = num2str(end_key_num);
         EXPECT_EQ(val, std::string(val_buf, val_len));
 
         ResetBuf(key_buf, key_len, max_key_len);
         ResetBuf(val_buf, val_len, max_val_len);
         ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // scan (0, 5]
     {
         uint64_t begin_key_num = 0;
         uint64_t end_key_num = 5;
-        uint64_t begin_key_buf = convert(begin_key_num);
-        uint64_t end_key_buf = convert(end_key_num);
-        std::string begin_key((char*)&begin_key_buf, sizeof(begin_key_buf));
-        std::string end_key((char*)&end_key_buf, sizeof(end_key_buf));
+        std::string begin_key=num2str(begin_key_num);
+        std::string end_key=num2str(end_key_num);
 
         char key_buf[max_key_len];
         size_t key_len;
@@ -240,25 +380,23 @@ TEST(KeyValueStore, SingleProcessScan) {
                             end_key.c_str(), end_key.size(), true);
         EXPECT_EQ(0, ret);
 
-        uint64_t key = convert(end_key_num);
-        EXPECT_EQ(key, *((uint64_t*)key_buf));
-        std::string val = std::to_string(end_key_num);
+        std::string key = num2str(end_key_num);
+        EXPECT_EQ(key, std::string(key_buf, key_len));
+        std::string val = num2str(end_key_num);
         EXPECT_EQ(val, std::string(val_buf, val_len));
 
         ResetBuf(key_buf, key_len, max_key_len);
         ResetBuf(val_buf, val_len, max_val_len);
         ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // scan [0, 5)
     {
         uint64_t begin_key_num = 0;
         uint64_t end_key_num = 5;
-        uint64_t begin_key_buf = convert(begin_key_num);
-        uint64_t end_key_buf = convert(end_key_num);
-        std::string begin_key((char*)&begin_key_buf, sizeof(begin_key_buf));
-        std::string end_key((char*)&end_key_buf, sizeof(end_key_buf));
+        std::string begin_key=num2str(begin_key_num);
+        std::string end_key=num2str(end_key_num);
 
         char key_buf[max_key_len];
         size_t key_len;
@@ -273,17 +411,15 @@ TEST(KeyValueStore, SingleProcessScan) {
                             val_buf, val_len,
                             begin_key.c_str(), begin_key.size(), true,
                             end_key.c_str(), end_key.size(), false);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // scan (0, 5)
     {
         uint64_t begin_key_num = 0;
         uint64_t end_key_num = 5;
-        uint64_t begin_key_buf = convert(begin_key_num);
-        uint64_t end_key_buf = convert(end_key_num);
-        std::string begin_key((char*)&begin_key_buf, sizeof(begin_key_buf));
-        std::string end_key((char*)&end_key_buf, sizeof(end_key_buf));
+        std::string begin_key=num2str(begin_key_num);
+        std::string end_key=num2str(end_key_num);
 
         char key_buf[max_key_len];
         size_t key_len;
@@ -298,17 +434,15 @@ TEST(KeyValueStore, SingleProcessScan) {
                             val_buf, val_len,
                             begin_key.c_str(), begin_key.size(), false,
                             end_key.c_str(), end_key.size(), false);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // scan [499, 600]
     {
         uint64_t begin_key_num = 499;
         uint64_t end_key_num = 600;
-        uint64_t begin_key_buf = convert(begin_key_num);
-        uint64_t end_key_buf = convert(end_key_num);
-        std::string begin_key((char*)&begin_key_buf, sizeof(begin_key_buf));
-        std::string end_key((char*)&end_key_buf, sizeof(end_key_buf));
+        std::string begin_key=num2str(begin_key_num);
+        std::string end_key=num2str(end_key_num);
 
         char key_buf[max_key_len];
         size_t key_len;
@@ -325,25 +459,23 @@ TEST(KeyValueStore, SingleProcessScan) {
                             end_key.c_str(), end_key.size(), true);
         EXPECT_EQ(0, ret);
 
-        uint64_t key = convert(begin_key_num);
-        EXPECT_EQ(key, *((uint64_t*)key_buf));
-        std::string val = std::to_string(begin_key_num);
+        std::string key = num2str(begin_key_num);
+        EXPECT_EQ(key, std::string(key_buf, key_len));
+        std::string val = num2str(begin_key_num);
         EXPECT_EQ(val, std::string(val_buf, val_len));
 
         ResetBuf(key_buf, key_len, max_key_len);
         ResetBuf(val_buf, val_len, max_val_len);
         ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // scan (499, 600]
     {
         uint64_t begin_key_num = 499;
         uint64_t end_key_num = 600;
-        uint64_t begin_key_buf = convert(begin_key_num);
-        uint64_t end_key_buf = convert(end_key_num);
-        std::string begin_key((char*)&begin_key_buf, sizeof(begin_key_buf));
-        std::string end_key((char*)&end_key_buf, sizeof(end_key_buf));
+        std::string begin_key=num2str(begin_key_num);
+        std::string end_key=num2str(end_key_num);
 
         char key_buf[max_key_len];
         size_t key_len;
@@ -358,17 +490,15 @@ TEST(KeyValueStore, SingleProcessScan) {
                             val_buf, val_len,
                             begin_key.c_str(), begin_key.size(), false,
                             end_key.c_str(), end_key.size(), true);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // scan [499, 600)
     {
         uint64_t begin_key_num = 499;
         uint64_t end_key_num = 600;
-        uint64_t begin_key_buf = convert(begin_key_num);
-        uint64_t end_key_buf = convert(end_key_num);
-        std::string begin_key((char*)&begin_key_buf, sizeof(begin_key_buf));
-        std::string end_key((char*)&end_key_buf, sizeof(end_key_buf));
+        std::string begin_key=num2str(begin_key_num);
+        std::string end_key=num2str(end_key_num);
 
         char key_buf[max_key_len];
         size_t key_len;
@@ -385,25 +515,23 @@ TEST(KeyValueStore, SingleProcessScan) {
                             end_key.c_str(), end_key.size(), false);
         EXPECT_EQ(0, ret);
 
-        uint64_t key = convert(begin_key_num);
-        EXPECT_EQ(key, *((uint64_t*)key_buf));
-        std::string val = std::to_string(begin_key_num);
+        std::string key = num2str(begin_key_num);
+        EXPECT_EQ(key, std::string(key_buf, key_len));
+        std::string val = num2str(begin_key_num);
         EXPECT_EQ(val, std::string(val_buf, val_len));
 
         ResetBuf(key_buf, key_len, max_key_len);
         ResetBuf(val_buf, val_len, max_val_len);
         ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // scan (499, 600)
     {
         uint64_t begin_key_num = 499;
         uint64_t end_key_num = 600;
-        uint64_t begin_key_buf = convert(begin_key_num);
-        uint64_t end_key_buf = convert(end_key_num);
-        std::string begin_key((char*)&begin_key_buf, sizeof(begin_key_buf));
-        std::string end_key((char*)&end_key_buf, sizeof(end_key_buf));
+        std::string begin_key=num2str(begin_key_num);
+        std::string end_key=num2str(end_key_num);
 
         char key_buf[max_key_len];
         size_t key_len;
@@ -418,17 +546,15 @@ TEST(KeyValueStore, SingleProcessScan) {
                             val_buf, val_len,
                             begin_key.c_str(), begin_key.size(), false,
                             end_key.c_str(), end_key.size(), false);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // scan [10, 10]
     {
         uint64_t begin_key_num = 10;
         uint64_t end_key_num = 10;
-        uint64_t begin_key_buf = convert(begin_key_num);
-        uint64_t end_key_buf = convert(end_key_num);
-        std::string begin_key((char*)&begin_key_buf, sizeof(begin_key_buf));
-        std::string end_key((char*)&end_key_buf, sizeof(end_key_buf));
+        std::string begin_key=num2str(begin_key_num);
+        std::string end_key=num2str(end_key_num);
 
         char key_buf[max_key_len];
         size_t key_len;
@@ -445,25 +571,23 @@ TEST(KeyValueStore, SingleProcessScan) {
                             end_key.c_str(), end_key.size(), true);
         EXPECT_EQ(0, ret);
 
-        uint64_t key = convert(begin_key_num);
-        EXPECT_EQ(key, *((uint64_t*)key_buf));
-        std::string val = std::to_string(begin_key_num);
+        std::string key = num2str(begin_key_num);
+        EXPECT_EQ(key, std::string(key_buf, key_len));
+        std::string val = num2str(begin_key_num);
         EXPECT_EQ(val, std::string(val_buf, val_len));
 
         ResetBuf(key_buf, key_len, max_key_len);
         ResetBuf(val_buf, val_len, max_val_len);
         ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // scan (10, 10]
     {
         uint64_t begin_key_num = 10;
         uint64_t end_key_num = 10;
-        uint64_t begin_key_buf = convert(begin_key_num);
-        uint64_t end_key_buf = convert(end_key_num);
-        std::string begin_key((char*)&begin_key_buf, sizeof(begin_key_buf));
-        std::string end_key((char*)&end_key_buf, sizeof(end_key_buf));
+        std::string begin_key=num2str(begin_key_num);
+        std::string end_key=num2str(end_key_num);
 
         char key_buf[max_key_len];
         size_t key_len;
@@ -478,17 +602,15 @@ TEST(KeyValueStore, SingleProcessScan) {
                             val_buf, val_len,
                             begin_key.c_str(), begin_key.size(), false,
                             end_key.c_str(), end_key.size(), true);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // scan [10, 10)
     {
         uint64_t begin_key_num = 10;
         uint64_t end_key_num = 10;
-        uint64_t begin_key_buf = convert(begin_key_num);
-        uint64_t end_key_buf = convert(end_key_num);
-        std::string begin_key((char*)&begin_key_buf, sizeof(begin_key_buf));
-        std::string end_key((char*)&end_key_buf, sizeof(end_key_buf));
+        std::string begin_key=num2str(begin_key_num);
+        std::string end_key=num2str(end_key_num);
 
         char key_buf[max_key_len];
         size_t key_len;
@@ -503,17 +625,15 @@ TEST(KeyValueStore, SingleProcessScan) {
                             val_buf, val_len,
                             begin_key.c_str(), begin_key.size(), true,
                             end_key.c_str(), end_key.size(), false);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // scan (10, 10)
     {
         uint64_t begin_key_num = 10;
         uint64_t end_key_num = 10;
-        uint64_t begin_key_buf = convert(begin_key_num);
-        uint64_t end_key_buf = convert(end_key_num);
-        std::string begin_key((char*)&begin_key_buf, sizeof(begin_key_buf));
-        std::string end_key((char*)&end_key_buf, sizeof(end_key_buf));
+        std::string begin_key=num2str(begin_key_num);
+        std::string end_key=num2str(end_key_num);
 
         char key_buf[max_key_len];
         size_t key_len;
@@ -528,17 +648,15 @@ TEST(KeyValueStore, SingleProcessScan) {
                             val_buf, val_len,
                             begin_key.c_str(), begin_key.size(), false,
                             end_key.c_str(), end_key.size(), false);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // scan [10, 100]
     {
         uint64_t begin_key_num = 10;
         uint64_t end_key_num = 100;
-        uint64_t begin_key_buf = convert(begin_key_num);
-        uint64_t end_key_buf = convert(end_key_num);
-        std::string begin_key((char*)&begin_key_buf, sizeof(begin_key_buf));
-        std::string end_key((char*)&end_key_buf, sizeof(end_key_buf));
+        std::string begin_key=num2str(begin_key_num);
+        std::string end_key=num2str(end_key_num);
 
         char key_buf[max_key_len];
         size_t key_len;
@@ -554,9 +672,11 @@ TEST(KeyValueStore, SingleProcessScan) {
                             begin_key.c_str(), begin_key.size(), true,
                             end_key.c_str(), end_key.size(), true);
         EXPECT_EQ(0, ret);
+        std::string key = num2str(begin_key_num);
+        EXPECT_EQ(key, std::string(key_buf, key_len));
         uint64_t i=begin_key_num;
-        EXPECT_EQ(i, convert(*((uint64_t*)key_buf)));
-        EXPECT_EQ(std::to_string(i), std::string(val_buf, val_len));
+        EXPECT_EQ(num2str(i), std::string(key_buf, key_len));
+        EXPECT_EQ(num2str(i), std::string(val_buf, val_len));
         ResetBuf(key_buf, key_len, max_key_len);
         ResetBuf(val_buf, val_len, max_val_len);
 
@@ -564,23 +684,21 @@ TEST(KeyValueStore, SingleProcessScan) {
         for(; i<=end_key_num;i++) {
             ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
             EXPECT_EQ(0, ret);
-            EXPECT_EQ(i, convert(*((uint64_t*)key_buf)));
-            EXPECT_EQ(std::to_string(i), std::string(val_buf, val_len));
+            EXPECT_EQ(num2str(i), std::string(key_buf, key_len));
+            EXPECT_EQ(num2str(i), std::string(val_buf, val_len));
             ResetBuf(key_buf, key_len, max_key_len);
             ResetBuf(val_buf, val_len, max_val_len);
         }
         ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // scan [10, 100)
     {
         uint64_t begin_key_num = 10;
         uint64_t end_key_num = 100;
-        uint64_t begin_key_buf = convert(begin_key_num);
-        uint64_t end_key_buf = convert(end_key_num);
-        std::string begin_key((char*)&begin_key_buf, sizeof(begin_key_buf));
-        std::string end_key((char*)&end_key_buf, sizeof(end_key_buf));
+        std::string begin_key=num2str(begin_key_num);
+        std::string end_key=num2str(end_key_num);
 
         char key_buf[max_key_len];
         size_t key_len;
@@ -597,8 +715,8 @@ TEST(KeyValueStore, SingleProcessScan) {
                             end_key.c_str(), end_key.size(), false);
         EXPECT_EQ(0, ret);
         uint64_t i=begin_key_num;
-        EXPECT_EQ(i, convert(*((uint64_t*)key_buf)));
-        EXPECT_EQ(std::to_string(i), std::string(val_buf, val_len));
+        EXPECT_EQ(num2str(i), std::string(key_buf, key_len));
+        EXPECT_EQ(num2str(i), std::string(val_buf, val_len));
         ResetBuf(key_buf, key_len, max_key_len);
         ResetBuf(val_buf, val_len, max_val_len);
 
@@ -606,23 +724,21 @@ TEST(KeyValueStore, SingleProcessScan) {
         for(; i<=end_key_num-1;i++) {
             ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
             EXPECT_EQ(0, ret);
-            EXPECT_EQ(i, convert(*((uint64_t*)key_buf)));
-            EXPECT_EQ(std::to_string(i), std::string(val_buf, val_len));
+            EXPECT_EQ(num2str(i), std::string(key_buf, key_len));
+            EXPECT_EQ(num2str(i), std::string(val_buf, val_len));
             ResetBuf(key_buf, key_len, max_key_len);
             ResetBuf(val_buf, val_len, max_val_len);
         }
         ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // scan (10, 100]
     {
         uint64_t begin_key_num = 10;
         uint64_t end_key_num = 100;
-        uint64_t begin_key_buf = convert(begin_key_num);
-        uint64_t end_key_buf = convert(end_key_num);
-        std::string begin_key((char*)&begin_key_buf, sizeof(begin_key_buf));
-        std::string end_key((char*)&end_key_buf, sizeof(end_key_buf));
+        std::string begin_key=num2str(begin_key_num);
+        std::string end_key=num2str(end_key_num);
 
         char key_buf[max_key_len];
         size_t key_len;
@@ -639,8 +755,8 @@ TEST(KeyValueStore, SingleProcessScan) {
                             end_key.c_str(), end_key.size(), true);
         EXPECT_EQ(0, ret);
         uint64_t i=begin_key_num+1;
-        EXPECT_EQ(i, convert(*((uint64_t*)key_buf)));
-        EXPECT_EQ(std::to_string(i), std::string(val_buf, val_len));
+        EXPECT_EQ(num2str(i), std::string(key_buf, key_len));
+        EXPECT_EQ(num2str(i), std::string(val_buf, val_len));
         ResetBuf(key_buf, key_len, max_key_len);
         ResetBuf(val_buf, val_len, max_val_len);
 
@@ -648,23 +764,21 @@ TEST(KeyValueStore, SingleProcessScan) {
         for(; i<=end_key_num;i++) {
             ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
             EXPECT_EQ(0, ret);
-            EXPECT_EQ(i, convert(*((uint64_t*)key_buf)));
-            EXPECT_EQ(std::to_string(i), std::string(val_buf, val_len));
+            EXPECT_EQ(num2str(i), std::string(key_buf, key_len));
+            EXPECT_EQ(num2str(i), std::string(val_buf, val_len));
             ResetBuf(key_buf, key_len, max_key_len);
             ResetBuf(val_buf, val_len, max_val_len);
         }
         ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // scan (10, 100)
     {
         uint64_t begin_key_num = 10;
         uint64_t end_key_num = 100;
-        uint64_t begin_key_buf = convert(begin_key_num);
-        uint64_t end_key_buf = convert(end_key_num);
-        std::string begin_key((char*)&begin_key_buf, sizeof(begin_key_buf));
-        std::string end_key((char*)&end_key_buf, sizeof(end_key_buf));
+        std::string begin_key=num2str(begin_key_num);
+        std::string end_key=num2str(end_key_num);
 
         char key_buf[max_key_len];
         size_t key_len;
@@ -681,8 +795,8 @@ TEST(KeyValueStore, SingleProcessScan) {
                             end_key.c_str(), end_key.size(), false);
         EXPECT_EQ(0, ret);
         uint64_t i=begin_key_num+1;
-        EXPECT_EQ(i, convert(*((uint64_t*)key_buf)));
-        EXPECT_EQ(std::to_string(i), std::string(val_buf, val_len));
+        EXPECT_EQ(num2str(i), std::string(key_buf, key_len));
+        EXPECT_EQ(num2str(i), std::string(val_buf, val_len));
         ResetBuf(key_buf, key_len, max_key_len);
         ResetBuf(val_buf, val_len, max_val_len);
 
@@ -690,13 +804,13 @@ TEST(KeyValueStore, SingleProcessScan) {
         for(; i<=end_key_num-1;i++) {
             ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
             EXPECT_EQ(0, ret);
-            EXPECT_EQ(i, convert(*((uint64_t*)key_buf)));
-            EXPECT_EQ(std::to_string(i), std::string(val_buf, val_len));
+            EXPECT_EQ(num2str(i), std::string(key_buf, key_len));
+            EXPECT_EQ(num2str(i), std::string(val_buf, val_len));
             ResetBuf(key_buf, key_len, max_key_len);
             ResetBuf(val_buf, val_len, max_val_len);
         }
         ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // with open boundary
@@ -720,13 +834,12 @@ TEST(KeyValueStore, SingleProcessScan) {
                             end_key.c_str(), end_key.size(), true);
         EXPECT_EQ(0, ret);
         EXPECT_EQ(begin_key, std::string(key_buf, key_len));
-        std::string val = "OPEN";
-        EXPECT_EQ(val, std::string(val_buf, val_len));
+        EXPECT_EQ(num2str(OPEN), std::string(val_buf, val_len));
 
         ResetBuf(key_buf, key_len, max_key_len);
         ResetBuf(val_buf, val_len, max_val_len);
         ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // with open boundary
@@ -752,22 +865,22 @@ TEST(KeyValueStore, SingleProcessScan) {
                             end_key.c_str(), end_key.size(), false);
         EXPECT_EQ(0, ret);
         EXPECT_EQ(begin_key, std::string(key_buf, key_len));
-        std::string val = "OPEN";
-        EXPECT_EQ(val, std::string(val_buf, val_len));
+        EXPECT_EQ(num2str(OPEN), std::string(val_buf, val_len));
         ResetBuf(key_buf, key_len, max_key_len);
         ResetBuf(val_buf, val_len, max_val_len);
 
         uint64_t i=begin_key_num;
         for(;i<=end_key_num;i++) {
+            std::cout << i << std::endl;
             ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
             EXPECT_EQ(0, ret);
-            EXPECT_EQ(i, convert(*((uint64_t*)key_buf)));
-            EXPECT_EQ(std::to_string(i), std::string(val_buf, val_len));
+            EXPECT_EQ(num2str(i), std::string(key_buf, key_len));
+            EXPECT_EQ(num2str(i), std::string(val_buf, val_len));
             ResetBuf(key_buf, key_len, max_key_len);
             ResetBuf(val_buf, val_len, max_val_len);
         }
         ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // with open boundary
@@ -791,13 +904,12 @@ TEST(KeyValueStore, SingleProcessScan) {
                             end_key.c_str(), end_key.size(), true);
         EXPECT_EQ(0, ret);
         EXPECT_EQ(begin_key, std::string(key_buf, key_len));
-        std::string val = "OPEN";
-        EXPECT_EQ(val, std::string(val_buf, val_len));
+        EXPECT_EQ(num2str(OPEN), std::string(val_buf, val_len));
 
         ResetBuf(key_buf, key_len, max_key_len);
         ResetBuf(val_buf, val_len, max_val_len);
         ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // with open boundary
@@ -823,20 +935,19 @@ TEST(KeyValueStore, SingleProcessScan) {
                             end_key.c_str(), end_key.size(), false);
         EXPECT_EQ(0, ret);
         EXPECT_EQ(begin_key, std::string(key_buf, key_len));
-        std::string val = "OPEN";
-        EXPECT_EQ(val, std::string(val_buf, val_len));
+        EXPECT_EQ(num2str(OPEN), std::string(val_buf, val_len));
 
         uint64_t i=begin_key_num;
         for(;i<=end_key_num;i++) {
             ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
             EXPECT_EQ(0, ret);
-            EXPECT_EQ(i, convert(*((uint64_t*)key_buf)));
-            EXPECT_EQ(std::to_string(i), std::string(val_buf, val_len));
+            EXPECT_EQ(num2str(i), std::string(key_buf, key_len));
+            EXPECT_EQ(num2str(i), std::string(val_buf, val_len));
             ResetBuf(key_buf, key_len, max_key_len);
             ResetBuf(val_buf, val_len, max_val_len);
         }
         ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // with open boundary
@@ -845,8 +956,7 @@ TEST(KeyValueStore, SingleProcessScan) {
         uint64_t begin_key_num = 5;
         uint64_t end_key_num = 100;
         std::string begin_key(KeyValueStore::OPEN_BOUNDARY_KEY, KeyValueStore::OPEN_BOUNDARY_KEY_SIZE);
-        uint64_t end_key_buf = convert(end_key_num);
-        std::string end_key((char*)&end_key_buf, sizeof(end_key_buf));
+        std::string end_key=num2str(end_key_num);
 
         char key_buf[max_key_len];
         size_t key_len;
@@ -863,20 +973,19 @@ TEST(KeyValueStore, SingleProcessScan) {
                             end_key.c_str(), end_key.size(), true);
         EXPECT_EQ(0, ret);
         EXPECT_EQ(begin_key, std::string(key_buf, key_len));
-        std::string val = "OPEN";
-        EXPECT_EQ(val, std::string(val_buf, val_len));
+        EXPECT_EQ(num2str(OPEN), std::string(val_buf, val_len));
 
         uint64_t i=begin_key_num;
         for(;i<=end_key_num;i++) {
             ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
             EXPECT_EQ(0, ret);
-            EXPECT_EQ(i, convert(*((uint64_t*)key_buf)));
-            EXPECT_EQ(std::to_string(i), std::string(val_buf, val_len));
+            EXPECT_EQ(num2str(i), std::string(key_buf, key_len));
+            EXPECT_EQ(num2str(i), std::string(val_buf, val_len));
             ResetBuf(key_buf, key_len, max_key_len);
             ResetBuf(val_buf, val_len, max_val_len);
         }
         ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // with open boundary
@@ -885,8 +994,7 @@ TEST(KeyValueStore, SingleProcessScan) {
         uint64_t begin_key_num = 10;
         uint64_t end_key_num = 499;
         std::string end_key(KeyValueStore::OPEN_BOUNDARY_KEY, KeyValueStore::OPEN_BOUNDARY_KEY_SIZE);
-        uint64_t begin_key_buf = convert(begin_key_num);
-        std::string begin_key((char*)&begin_key_buf, sizeof(begin_key_buf));
+        std::string begin_key=num2str(begin_key_num);
 
         char key_buf[max_key_len];
         size_t key_len;
@@ -903,21 +1011,21 @@ TEST(KeyValueStore, SingleProcessScan) {
                             end_key.c_str(), end_key.size(), false);
         EXPECT_EQ(0, ret);
         uint64_t i=begin_key_num;
-        EXPECT_EQ(i, convert(*((uint64_t*)key_buf)));
-        EXPECT_EQ(std::to_string(i), std::string(val_buf, val_len));
+        EXPECT_EQ(num2str(i), std::string(key_buf, key_len));
+        EXPECT_EQ(num2str(i), std::string(val_buf, val_len));
         ResetBuf(key_buf, key_len, max_key_len);
         ResetBuf(val_buf, val_len, max_val_len);
         i++;
         for(;i<=end_key_num;i++) {
             ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
             EXPECT_EQ(0, ret);
-            EXPECT_EQ(i, convert(*((uint64_t*)key_buf)));
-            EXPECT_EQ(std::to_string(i), std::string(val_buf, val_len));
+            EXPECT_EQ(num2str(i), std::string(key_buf, key_len));
+            EXPECT_EQ(num2str(i), std::string(val_buf, val_len));
             ResetBuf(key_buf, key_len, max_key_len);
             ResetBuf(val_buf, val_len, max_val_len);
         }
         ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // with open boundary
@@ -926,8 +1034,7 @@ TEST(KeyValueStore, SingleProcessScan) {
         uint64_t begin_key_num = 5;
         uint64_t end_key_num = 100;
         std::string begin_key(KeyValueStore::OPEN_BOUNDARY_KEY, KeyValueStore::OPEN_BOUNDARY_KEY_SIZE);
-        uint64_t end_key_buf = convert(end_key_num);
-        std::string end_key((char*)&end_key_buf, sizeof(end_key_buf));
+        std::string end_key=num2str(end_key_num);
 
         char key_buf[max_key_len];
         size_t key_len;
@@ -944,20 +1051,19 @@ TEST(KeyValueStore, SingleProcessScan) {
                             end_key.c_str(), end_key.size(), false);
         EXPECT_EQ(0, ret);
         EXPECT_EQ(begin_key, std::string(key_buf, key_len));
-        std::string val = "OPEN";
-        EXPECT_EQ(val, std::string(val_buf, val_len));
+        EXPECT_EQ(num2str(OPEN), std::string(val_buf, val_len));
 
         uint64_t i=begin_key_num;
         for(;i<=end_key_num-1;i++) {
             ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
             EXPECT_EQ(0, ret);
-            EXPECT_EQ(i, convert(*((uint64_t*)key_buf)));
-            EXPECT_EQ(std::to_string(i), std::string(val_buf, val_len));
+            EXPECT_EQ(num2str(i), std::string(key_buf, key_len));
+            EXPECT_EQ(num2str(i), std::string(val_buf, val_len));
             ResetBuf(key_buf, key_len, max_key_len);
             ResetBuf(val_buf, val_len, max_val_len);
         }
         ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // with open boundary
@@ -966,8 +1072,7 @@ TEST(KeyValueStore, SingleProcessScan) {
         uint64_t begin_key_num = 10;
         uint64_t end_key_num = 499;
         std::string end_key(KeyValueStore::OPEN_BOUNDARY_KEY, KeyValueStore::OPEN_BOUNDARY_KEY_SIZE);
-        uint64_t begin_key_buf = convert(begin_key_num);
-        std::string begin_key((char*)&begin_key_buf, sizeof(begin_key_buf));
+        std::string begin_key=num2str(begin_key_num);
 
         char key_buf[max_key_len];
         size_t key_len;
@@ -984,21 +1089,21 @@ TEST(KeyValueStore, SingleProcessScan) {
                             end_key.c_str(), end_key.size(), false);
         EXPECT_EQ(0, ret);
         uint64_t i=begin_key_num+1;
-        EXPECT_EQ(i, convert(*((uint64_t*)key_buf)));
-        EXPECT_EQ(std::to_string(i), std::string(val_buf, val_len));
+        EXPECT_EQ(num2str(i), std::string(key_buf, key_len));
+        EXPECT_EQ(num2str(i), std::string(val_buf, val_len));
         ResetBuf(key_buf, key_len, max_key_len);
         ResetBuf(val_buf, val_len, max_val_len);
         i++;
         for(;i<=end_key_num;i++) {
             ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
             EXPECT_EQ(0, ret);
-            EXPECT_EQ(i, convert(*((uint64_t*)key_buf)));
-            EXPECT_EQ(std::to_string(i), std::string(val_buf, val_len));
+            EXPECT_EQ(num2str(i), std::string(key_buf, key_len));
+            EXPECT_EQ(num2str(i), std::string(val_buf, val_len));
             ResetBuf(key_buf, key_len, max_key_len);
             ResetBuf(val_buf, val_len, max_val_len);
         }
         ret = kvs->GetNext(iter, key_buf, key_len, val_buf, val_len);
-        EXPECT_EQ(-1, ret);
+        EXPECT_EQ(-2, ret);
     }
 
     // delete the radix tree
@@ -1015,11 +1120,11 @@ void DoWork(GlobalPtr root)
     // =======================================================================
     // reset epoch manager after fork()
     EpochManager *em = EpochManager::GetInstance();
-    em->ResetAfterFork();
+    em->Start();
 
     // =======================================================================
     // open an existing radix tree
-    KeyValueStore *kvs = KeyValueStore::MakeKVS(0, root);
+    KeyValueStore *kvs = KeyValueStore::MakeKVS(KVSTYPE, root);
     EXPECT_NE(nullptr, kvs);
 
     // =======================================================================
@@ -1032,7 +1137,8 @@ void DoWork(GlobalPtr root)
     size_t key_len;
     ResetBuf(key_buf, key_len, max_key_len);
 
-    size_t const max_val_len = 40;
+    size_t const min_val_len = kvs->MaxValLen()<1024?kvs->MaxValLen():0;
+    size_t const max_val_len = kvs->MaxValLen()<1024?kvs->MaxValLen():1024;
     EXPECT_GE(kvs->MaxValLen(), max_val_len);
     char val_buf[max_val_len];
     size_t val_len;
@@ -1044,7 +1150,7 @@ void DoWork(GlobalPtr root)
         if (op==0)
         {
             key = rand_string(1, max_key_len);
-            val = rand_string(0, max_val_len);
+            val = rand_string(min_val_len, max_val_len);
             (void)kvs->Put(key.c_str(), key.size(), val.c_str(), val.size());
         }
         else if (op==1)
@@ -1086,7 +1192,7 @@ void DoWork(GlobalPtr root)
 TEST(KeyValueStore, MultiProcessStress) {
     // =======================================================================
     // create a new radix tree
-    KeyValueStore *kvs = KeyValueStore::MakeKVS(0, 0);
+    KeyValueStore *kvs = KeyValueStore::MakeKVS(KVSTYPE, 0);
     EXPECT_NE(nullptr, kvs);
     GlobalPtr root = kvs->Location();
     delete kvs;
@@ -1094,7 +1200,7 @@ TEST(KeyValueStore, MultiProcessStress) {
     // =======================================================================
     // reset epoch manager before fork()
     EpochManager *em = EpochManager::GetInstance();
-    em->ResetBeforeFork();
+    em->Stop();
 
     // =======================================================================
     // do work
@@ -1125,14 +1231,13 @@ TEST(KeyValueStore, MultiProcessStress) {
 
     // =======================================================================
     // reset epoch manager after fork() for the main process
-    em->ResetAfterFork();
+    em->Start();
 }
-
 
 void Init()
 {
-    KeyValueStore::Reset();
-    KeyValueStore::Start();
+    nvmm::ResetNVMM();
+    nvmm::StartNVMM();
 }
 
 int main (int argc, char** argv) {

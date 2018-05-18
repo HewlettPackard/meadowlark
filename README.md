@@ -177,6 +177,30 @@ commands to a radix tree, given its root. Below are the steps to run the demo:
 
 Please see demo/demo_radix_tree.cc
 
+## Extension: KVS library
+
+A set of Key-Value-Store (KVS) APIs (put, get, and delete) are implemented on top of the radixtree library, thus turning it
+into a KVS library. Please see include/radixtree/kvs.h for the APIs and test/test_kvs.cc for
+examples.
+
+## Extension: Consistent DRAM caching
+
+Based on current expectation, FAM will have higher load/store latency than DRAM. To further improve
+the performance of the KVS library, we are working on a DRAM caching layer (based on memcached) that
+caches key-value pairs in node-local DRAM for faster reads and ensures they are consistent and
+up-to-date even when they are being updated. For more details, see KVS-DRAM-Cache
+(https://github.hpe.com/labs/KVS-DRAM-Cache) 
+
+## Extension: KVS server and KVS client
+
+Since KVS-DRAM-Cache is based on memcached, we are able to utilize its server front-end to service
+client requests over the network through memcached protocols. On top of that, we build a simple cluster
+management layer that can organize multiple KVS servers as a single KVS cluster with different
+replication configurations (e.g., static partitioning, master-slave, dynamo-like, sharing). We also
+implement a simple client library that automatically routes a KVS request to a corresponding
+server. Please see bin/*.yaml for configuration setups and include/kvs_client/kvs_client.h for
+client APIs. 
+
 ## Notes
 - There is another implementation of RadixTree at branch "numa_radixtree" whose FAM-support is still
 work in progress

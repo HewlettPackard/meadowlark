@@ -1,0 +1,95 @@
+nvmm:
+  shelf_base: /dev/shm/zhanyupu/server
+  shelf_user: memcached
+kvs:
+  partition_cnt: 10
+  server_cnt: 10
+  node_cnt: 10
+  starting_port: 10000
+  kvs_type: radixtree
+  kvs_size: 1073741824
+  cache_size: 268435456
+  replication_scheme: DYNAMO
+  replication_factor: 3
+  partitions:
+    0:
+      kvs_root: "[33:4096]"
+      kvs_size: 1073741824
+      kvs_type: radixtree
+      cache_size: 268435456
+      shelf_base: /dev/shm/zhanyupu/server_0
+      shelf_user: memcached_0
+    1:
+      kvs_root: "[33:4096]"
+      kvs_size: 1073741824
+      kvs_type: radixtree
+      cache_size: 268435456
+      shelf_base: /dev/shm/zhanyupu/server_1
+      shelf_user: memcached_1
+    2:
+      kvs_root: "[33:4096]"
+      kvs_size: 1073741824
+      kvs_type: radixtree
+      cache_size: 268435456
+      shelf_base: /dev/shm/zhanyupu/server_2
+      shelf_user: memcached_2
+    3:
+      kvs_root: "[33:4096]"
+      kvs_size: 1073741824
+      kvs_type: radixtree
+      cache_size: 268435456
+      shelf_base: /dev/shm/zhanyupu/server_3
+      shelf_user: memcached_3
+    4:
+      kvs_root: "[33:4096]"
+      kvs_size: 1073741824
+      kvs_type: radixtree
+      cache_size: 268435456
+      shelf_base: /dev/shm/zhanyupu/server_4
+      shelf_user: memcached_4
+    5:
+      kvs_root: "[33:4096]"
+      kvs_size: 1073741824
+      kvs_type: radixtree
+      cache_size: 268435456
+      shelf_base: /dev/shm/zhanyupu/server_5
+      shelf_user: memcached_5
+    6:
+      kvs_root: "[33:4096]"
+      kvs_size: 1073741824
+      kvs_type: radixtree
+      cache_size: 268435456
+      shelf_base: /dev/shm/zhanyupu/server_6
+      shelf_user: memcached_6
+    7:
+      kvs_root: "[33:4096]"
+      kvs_size: 1073741824
+      kvs_type: radixtree
+      cache_size: 268435456
+      shelf_base: /dev/shm/zhanyupu/server_7
+      shelf_user: memcached_7
+    8:
+      kvs_root: "[33:4096]"
+      kvs_size: 1073741824
+      kvs_type: radixtree
+      cache_size: 268435456
+      shelf_base: /dev/shm/zhanyupu/server_8
+      shelf_user: memcached_8
+    9:
+      kvs_root: "[33:4096]"
+      kvs_size: 1073741824
+      kvs_type: radixtree
+      cache_size: 268435456
+      shelf_base: /dev/shm/zhanyupu/server_9
+      shelf_user: memcached_9
+  servers:
+    0: 127.0.0.1
+    1: 127.0.0.1
+    2: 127.0.0.1
+    3: 127.0.0.1
+    4: 127.0.0.1
+    5: 127.0.0.1
+    6: 127.0.0.1
+    7: 127.0.0.1
+    8: 127.0.0.1
+    9: 127.0.0.1

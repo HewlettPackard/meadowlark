@@ -40,6 +40,8 @@
 #include "radixtree/kvs.h"
 #include "radixtree/radix_tree.h"
 
+#include "kvs_metrics.h"
+
 
 namespace radixtree {
 // TODO: error codes!
@@ -49,11 +51,13 @@ using Eop = nvmm::EpochOp;
 
 class KVSRadixTree : public KeyValueStore {
 public:
-    static size_t const kMaxKeyLen = sizeof(RadixTree::key_type); // 40 bytes
+    static size_t const kMaxKeyLen = RadixTree::MAX_KEY_LEN; // 40 bytes for now
     static size_t const kMaxValLen = std::numeric_limits<size_t>::max();
 
-    KVSRadixTree(Gptr root);
+    KVSRadixTree(Gptr root, std::string base, std::string user, size_t heap_size, nvmm::PoolId heap_id, RadixTreeMetrics* kvs_metrics);
     ~KVSRadixTree();
+
+    void Maintenance();
 
     int Put (char const *key, size_t const key_len,
 	     char const *val, size_t const val_len);
@@ -80,14 +84,50 @@ public:
     size_t MaxKeyLen() {return kMaxKeyLen;}
     size_t MaxValLen() {return kMaxValLen;}
 
+
+    /*
+      for consistent DRAM caching
+
+      val_ptr is always the up-to-date val_ptr in FAM
+    */
+    // for non-cached put
+    int Put (char const *key, size_t const key_len,
+	     char const *val, size_t const val_len,
+             Gptr &key_ptr, TagGptr &val_ptr);
+
+    // for cached put
+    int Put (Gptr const key_ptr, TagGptr &val_ptr,
+	     char const *val, size_t const val_len);
+
+    // for non-cached Get
+    int Get (char const *key, size_t const key_len,
+	     char *val, size_t &val_len,
+             Gptr &key_ptr, TagGptr &val_ptr);
+
+    // for cached Get
+    // set get_value to true if one wants to fetch the value regardlessly (for shortcut caching)
+    // otherwise, only when the given val_ptr is stale we fetch the value from FAM (for full caching)
+    // return 1 if the val_ptr is up-to-date
+    int Get (Gptr const key_ptr, TagGptr &val_ptr,
+	     char *val, size_t &val_len, bool get_value=false);
+
+    // for non-cached Del
+    int Del (char const *key, size_t const key_len,
+             Gptr &key_ptr, TagGptr &val_ptr);
+
+    // for cached Del
+    int Del (Gptr const key_ptr, TagGptr &val_ptr);
+
+    void ReportMetrics();
+
 private:
     struct ValBuf {
         size_t size;
         char val[0];
     };
 
-    static nvmm::PoolId const heap_id_ = 2;
-    static size_t const heap_size_ = 1024*1024*1024; // 1024MB
+    nvmm::PoolId heap_id_;
+    size_t heap_size_;
 
     Mmgr *mmgr_;
     Emgr *emgr_;
@@ -95,9 +135,10 @@ private:
 
     RadixTree *tree_;
     Gptr root_;
+    RadixTreeMetrics *metrics_;
 
     // TODO: remove mutex?
-    std::mutex mutex_;
+    std::mutex mutex_; // for iterator deque
     // TODO: clean up used iters
     //std::vector<RadixTree::Iter*> iters_;
     std::deque<RadixTree::Iter*> iters_;
@@ -105,6 +146,7 @@ private:
 
     int Open();
     int Close();
+
 };
 
 } // namespace radixtree

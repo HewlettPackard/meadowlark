@@ -1,0 +1,22 @@
+nvmm:
+ shelf_base: /dev/shm/zhanyupu
+ shelf_user: memcached
+
+kvs:
+ partition_cnt: 1
+ server_cnt: 1
+
+ node_cnt: 1
+ starting_port: 10000
+
+ kvs_type: radixtree
+ kvs_size: 1073741824
+
+ cache_size: 268435456
+ server_thread: 4
+
+ replication_scheme: NO_REPLICATION
+ replication_factor: 1
+
+ servers:
+  0: 127.0.0.1

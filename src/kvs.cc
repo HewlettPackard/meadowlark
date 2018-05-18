@@ -22,26 +22,77 @@
  *
  */
 
+#include <iostream>
+#include <string>
+
 #include "nvmm/global_ptr.h"
 #include "nvmm/memory_manager.h"
 #include "nvmm/epoch_manager.h"
+
 #include "radixtree/kvs.h"
+#include "radixtree/common.h" // TagGptr
 #include "kvs_radix_tree.h"
+#include "kvs_radix_tree_tiny.h"
+#include "kvs_split_ordered.h"
+#include "kvs_metrics_config.h"
+#include "radix_tree_metrics.h"
+#include "split_ordered_metrics.h"
+
 
 namespace radixtree {
 
-KeyValueStore *KeyValueStore::MakeKVS(int choice, nvmm::GlobalPtr location) {
-    return new KVSRadixTree(location);
+KeyValueStore *KeyValueStore::MakeKVS(IndexType type, nvmm::GlobalPtr location,
+                                      std::string base, std::string user,
+                                      size_t heap_size, nvmm::PoolId heap_id) {
+    Start(base, user);
+
+    KVSMetricsConfig kvs_metrics_config; // configuration through environment variables
+
+    switch(type) {
+    case RADIX_TREE: {
+        RadixTreeMetrics* metrics = new RadixTreeMetrics(kvs_metrics_config);
+        return new KVSRadixTree(location, base, user, heap_size, heap_id, metrics);
+    }
+    case RADIX_TREE_TINY: {
+        RadixTreeMetrics* metrics = new RadixTreeMetrics(kvs_metrics_config);
+        return new KVSRadixTreeTiny(location, base, user, heap_size, heap_id, metrics);
+    }
+    case HASH_TABLE: {
+        SplitOrderedMetrics* metrics = new SplitOrderedMetrics(kvs_metrics_config);
+        return new KVSSplitOrdered(location, base, user, heap_size, heap_id, metrics);
+    }
+    case INVALID:
+    default:
+        return nullptr;
+    }
 }
 
-void KeyValueStore::Start() {
-    nvmm::EpochManager::Start();
-    nvmm::MemoryManager::Start();
+KeyValueStore *KeyValueStore::MakeKVS(std::string type_str, nvmm::GlobalPtr location,
+                                      std::string base, std::string user,
+                                      size_t heap_size, nvmm::PoolId heap_id) {
+    IndexType type;
+    if(type_str=="radixtree")
+        type = RADIX_TREE;
+    else if(type_str=="radixtree_tiny")
+        type = RADIX_TREE_TINY;
+    else if(type_str=="hashtable")
+        type = HASH_TABLE;
+    else
+        type = INVALID;
+
+    return MakeKVS(type, location, base, user, heap_size, heap_id);
+}
+    
+void KeyValueStore::Start(std::string base, std::string user) {
+    nvmm::StartNVMM(base, user);
 }
 
-void KeyValueStore::Reset() {
-    nvmm::EpochManager::Reset();
-    nvmm::MemoryManager::Reset();
+void KeyValueStore::Reset(std::string base, std::string user) {
+    nvmm::ResetNVMM(base, user);
+}
+
+void KeyValueStore::Restart(std::string base, std::string user) {
+    nvmm::RestartNVMM(base, user);
 }
 
 } // namespace radixtree
