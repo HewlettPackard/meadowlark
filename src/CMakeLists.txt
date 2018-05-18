@@ -26,6 +26,3 @@ target_link_libraries(kvs_client cluster memcached pthread)
 if(USE_QUARTZ)
   target_link_libraries(radixtree ${QUARTZ_LIBRARY})
 endif()
-
-
-add_subdirectory(cache)
