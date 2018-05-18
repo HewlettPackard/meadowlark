@@ -20,11 +20,13 @@ atomically. Use of these atomics permits programs running on multiple non-cohere
 FAM environment to transactionally update the radix tree in a controlled fashion.
 
 Radix tree relies on the FAM-aware Non-Volatile Memory Manager (NVMM) library, which is available
-from https://github.com/HewlettPackard/gull.
+from https://github.hpe.com/labs/nvmm or https://github.com/HewlettPackard/gull.
 
 ## Master Source
 
-https://github.com/HewlettPackard/meadowlark
+https://github.hpe.com/labs/radixtree (internal)
+
+https://github.com/HewlettPackard/meadowlark (external)
 
 ## Maturity
 Radix Tree is still in alpha state. The basic functionalities are working, but performance is
@@ -66,17 +68,23 @@ Radix Tree runs on both NUMA and FAME ([Fabric-Attached Memory
   $ sudo make install
   ```
 
-- Install [NVMM](https://github.com/HewlettPackard/gull/blob/master/README.md)
+- Install NVMM
 
   Radix Tree uses Non-Volatile Memory Manager (NVMM). Before building the radix tree, please
   download and build NVMM.
 
-- Setup [FAME](https://github.com/HewlettPackard/mdc-toolkit/blob/master/guide-FAME.md) if you want to try Radix Tree on top of FAM
+- Setup [FAME](https://github.hpe.com/labs/mdc-toolkit/blob/master/guide-FAME.md) if you want to try Radix Tree on top of FAM
 
 ## Build & Test
 
 1. Download the source code:
 
+ Internal:
+ ```
+ $ git clone https://github.hpe.com/labs/radixtree.git
+ ```
+
+ External:
  ```
  $ git clone https://github.com/HewlettPackard/meadowlark.git
  ```
@@ -136,7 +144,7 @@ Radix Tree runs on both NUMA and FAME ([Fabric-Attached Memory
 There is a demo program that creates and destroys radix trees, and issue put/get/destroy/list
 commands to a radix tree, given its root. Below are the steps to run the demo:
 
-1. Setup [FAME](https://github.com/HewlettPackard/mdc-toolkit/blob/master/guide-FAME.md) with at least two nodes (e.g., node01 and node02)
+1. Setup [FAME](https://github.hpe.com/labs/mdc-toolkit/blob/master/guide-FAME.md) with at least two nodes (e.g., node01 and node02)
 
 2. Install NVMM with FAME support on all nodes
 
@@ -169,6 +177,30 @@ commands to a radix tree, given its root. Below are the steps to run the demo:
 ## Usage
 
 Please see demo/demo_radix_tree.cc
+
+## Extension: KVS library
+
+A set of Key-Value-Store (KVS) APIs (put, get, and delete) are implemented on top of the radixtree library, thus turning it
+into a KVS library. Please see include/radixtree/kvs.h for the APIs and test/test_kvs.cc for
+examples.
+
+## Extension: Consistent DRAM caching
+
+Based on current expectation, FAM will have higher load/store latency than DRAM. To further improve
+the performance of the KVS library, we are working on a DRAM caching layer (based on memcached) that
+caches key-value pairs in node-local DRAM for faster reads and ensures they are consistent and
+up-to-date even when they are being updated. For more details, see KVS-DRAM-Cache
+(https://github.hpe.com/labs/KVS-DRAM-Cache) 
+
+## Extension: KVS server and KVS client
+
+Since KVS-DRAM-Cache is based on memcached, we are able to utilize its server front-end to service
+client requests over the network through memcached protocols. On top of that, we build a simple cluster
+management layer that can organize multiple KVS servers as a single KVS cluster with different
+replication configurations (e.g., static partitioning, master-slave, dynamo-like, sharing). We also
+implement a simple client library that automatically routes a KVS request to a corresponding
+server. Please see bin/*.yaml for configuration setups and include/kvs_client/kvs_client.h for
+client APIs. 
 
 ## Notes
 - There is another implementation of RadixTree at branch "numa_radixtree" whose FAM-support is still

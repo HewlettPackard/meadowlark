@@ -1,8 +1,12 @@
 function (add_radixtree_test file_name )
   add_executable(${file_name} ${file_name}.cc)
   add_dependencies(${file_name} radixtree_shelf_base_dir)
-  target_link_libraries(${file_name} radixtree gtest boost_filesystem boost_system)
+  target_link_libraries(${file_name} radixtree cluster gtest ${NVMM_LIBRARY} ${Boost_LIBRARIES})
   add_test(NAME ${file_name} COMMAND ${CMAKE_CURRENT_BINARY_DIR}/${file_name})
 endfunction()
 
 add_radixtree_test(test_radix_tree)
+add_radixtree_test(test_split_ordered)
+add_radixtree_test(test_kvs)
+add_radixtree_test(test_cluster)
+configure_file(test_cluster.yaml test_cluster.yaml COPYONLY)
