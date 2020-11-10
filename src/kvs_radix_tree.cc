@@ -1,5 +1,5 @@
 /*
- *  (c) Copyright 2016-2017 Hewlett Packard Enterprise Development Company LP.
+ *  (c) Copyright 2016-2020 Hewlett Packard Enterprise Development Company LP.
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as published by
@@ -34,6 +34,7 @@
 #include "nvmm/shelf_id.h"
 #include "nvmm/memory_manager.h"
 #include "nvmm/heap.h"
+#include "nvmm/log.h"
 
 #include "nvmm/fam.h"
 #include "kvs_radix_tree.h"
@@ -149,7 +150,7 @@ int KVSRadixTree::Put (char const *key, size_t const key_len,
     memcpy((char*)val_ptr->val, (char const *)val, val_len);
     fam_persist(val_ptr, sizeof(ValBuf)+val_len);
 
-    TagGptr old_value = tree_->put(key, key_len, val_gptr);
+    TagGptr old_value = tree_->put(key, key_len, val_gptr, UPDATE);
     if (old_value.IsValid()) {
 // #ifdef DEBUG
 //        std::cout << "  successfully updated "
@@ -521,6 +522,64 @@ void KVSRadixTree::ReportMetrics() {
     if (metrics_) {
         metrics_->Report();
     }
+}
+
+/* This function is used when one wants to get an element if exists
+ * else insert the same to the tree in an atomic manner.
+ *
+ * Return value
+ *         -1  Failed to find or create.
+ *          0  item was found. 
+ *          1  Item was inserted.
+ * These values help the caller to take necessary actions.
+ */          
+int KVSRadixTree::FindOrCreate(char const *key, size_t const key_len,
+                       char const *val, size_t const val_len, char *ret_val, size_t &ret_len) {
+
+    if (key_len > kMaxKeyLen)
+        return -1;
+    if (val_len > kMaxValLen)
+        return -1;
+
+    Eop op(emgr_);
+
+    Gptr val_gptr = heap_->Alloc(op, val_len+sizeof(ValBuf));
+    if (!val_gptr.IsValid())
+        return -1;
+
+    ValBuf *val_ptr = (ValBuf*)mmgr_->GlobalToLocal(val_gptr);
+
+    val_ptr->size = val_len;
+    memcpy((char*)val_ptr->val, (char const *)val, val_len);
+    fam_persist(val_ptr, sizeof(ValBuf)+val_len);
+
+    TagGptr old_value = tree_->put(key, key_len, val_gptr, FIND_OR_CREATE);
+    if (old_value.IsValid()) {
+
+        LOG(trace) <<"KVSRadixTree::FindOrCreate(): Returning the found Entry\n" << std::endl;
+        heap_->Free(op, val_gptr);
+
+        ValBuf *val_p = (ValBuf*)mmgr_->GlobalToLocal(old_value.gptr());
+        fam_invalidate(&val_p->size, sizeof(size_t));
+        size_t val_size = val_p->size;
+        if(ret_len < val_size) {
+            std::cout << "  val buffer is too small: " << ret_len << " -> " << val_size << std::endl;
+            ret_len = val_size;
+            return -1;
+        }
+        ret_len = val_size;
+        fam_invalidate(&val_p->val, ret_len);
+        assert(ret_val != nullptr);
+        fam_memcpy((char*)ret_val, (char*)val_p->val, ret_len);
+
+        return 0;
+    } else {
+         LOG(trace) << "  successfully inserted "
+                   << std::string(key, key_len) << " = " << std::string(val, val_len) << std::endl;
+
+        return 1;
+    }
+
 }
 
 } // namespace radixtree

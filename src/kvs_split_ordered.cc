@@ -1,5 +1,5 @@
 /*
- *  (c) Copyright 2016-2017 Hewlett Packard Enterprise Development Company LP.
+ *  (c) Copyright 2016-2020 Hewlett Packard Enterprise Development Company LP.
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as published by
@@ -240,6 +240,13 @@ void KVSSplitOrdered::ReportMetrics() {
     if (metrics_) {
         metrics_->Report();
     }
+}
+
+int KVSSplitOrdered::FindOrCreate (char const *key, size_t const key_len,
+                       char const *val, size_t const val_len,
+            char *ret_val, size_t &ret_len)
+{
+    return 0;
 }
 
 

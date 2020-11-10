@@ -1,5 +1,5 @@
 /*
- *  (c) Copyright 2016-2017 Hewlett Packard Enterprise Development Company LP.
+ *  (c) Copyright 2016-2020 Hewlett Packard Enterprise Development Company LP.
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as published by
@@ -137,7 +137,7 @@ TEST(RadixTree, SingleProcess) {
     *value_ptr = value;
     fam_persist(value_ptr, sizeof(value));
 
-    result = tree->put(key_buf, key_size, value_gptr);
+    result = tree->put(key_buf, key_size, value_gptr, UPDATE);
     EXPECT_EQ(0UL, result.gptr());
 
     // get 1
@@ -159,7 +159,7 @@ TEST(RadixTree, SingleProcess) {
     *value_ptr = value;
     fam_persist(value_ptr, sizeof(value));
 
-    result = tree->put(key_buf, key_size, value_gptr);
+    result = tree->put(key_buf, key_size, value_gptr, UPDATE);
     EXPECT_EQ(result_old, result);
     heap->Free(result.gptr());
 
@@ -233,7 +233,7 @@ TEST(RadixTree, SingleProcessScan) {
     *value_ptr = value;
     fam_persist(value_ptr, sizeof(value));
 
-    result = tree->put(key_buf, key_size, value_gptr);
+    result = tree->put(key_buf, key_size, value_gptr, UPDATE);
     EXPECT_EQ(0UL, result.gptr());
 
     // insert [5,499]
@@ -248,7 +248,7 @@ TEST(RadixTree, SingleProcessScan) {
         *value_ptr = value;
         fam_persist(value_ptr, sizeof(value));
 
-        result = tree->put(key_buf, key_size, value_gptr);
+        result = tree->put(key_buf, key_size, value_gptr, UPDATE);
         EXPECT_EQ(0UL, result.gptr());
     }
 
@@ -864,7 +864,7 @@ void DoWork(GlobalPtr root, PoolId heap_id)
             memcpy((char*)value_ptr, value.c_str(), value_size+1);
             fam_persist(value_ptr, value_size+1);
 
-            result = tree->put(key_buf, key_size, value_gptr);
+            result = tree->put(key_buf, key_size, value_gptr, UPDATE);
             if (result.gptr())
                 heap->Free(result.gptr());
         }

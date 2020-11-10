@@ -1,5 +1,5 @@
 /*
- *  (c) Copyright 2016-2017 Hewlett Packard Enterprise Development Company LP.
+ *  (c) Copyright 2016-2020 Hewlett Packard Enterprise Development Company LP.
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as published by
@@ -221,7 +221,7 @@ void RadixTree::recursive_structure(Gptr parent, int level, TreeStructure& struc
 }
 
 
-TagGptr RadixTree::put(const char *key, const size_t key_size, Gptr value) {
+TagGptr RadixTree::put(const char *key, const size_t key_size, Gptr value, UpdateFlags update) {
     assert(key_size>0 && key_size<=MAX_KEY_LEN);
 
     Gptr *p = NULL;
@@ -254,6 +254,9 @@ TagGptr RadixTree::put(const char *key, const size_t key_size, Gptr value) {
             }
             else {
                 // the key so far has matched the entire prefix
+                if(!update)
+                    assert(i==n->prefix_size);
+
                 //assert(key_size >= n->prefix_size);
                 //assert(i==n->prefix_size);
                 if (key_size == i) {
@@ -270,12 +273,39 @@ TagGptr RadixTree::put(const char *key, const size_t key_size, Gptr value) {
 #else
                     loadTagGptr(tp, tq);
 #endif
-                    for(;;) {
-                        TagGptr seen_tq = casTagGptr(tp, tq, TagGptr(value, tq.tag()+1));
-                        if (seen_tq == tq) {
-                            return tq;
+                    /* When there is a key match, if update is set, that means
+                     * It will update the vaule associated with the key with the
+                     * new value given.
+                     */
+                    if(update) {
+                        for(;;) {
+                            TagGptr seen_tq = casTagGptr(tp, tq, TagGptr(value, tq.tag()+1));
+                            if (seen_tq == tq) {
+                                return tq;
+                            }
+                            tq = seen_tq;
                         }
-                        tq = seen_tq;
+                    } else {
+                        /* In this case update is not set, that means it found
+                         * a vlue for the key and the same value is returned if
+                         * the node posses a valid value.
+                         */
+                        if(tq.IsValid()) {
+                            return tq;
+                        }else {
+                            /* Here, the key match happened, just update the
+                             * value to make the node valid (possess a valid
+                             * value) instead of recreating the node with same
+                             * key, where it may loose existing child nodes if any.
+                             */
+                            for(;;) {
+                                TagGptr seen_tq = casTagGptr(tp, tq, TagGptr(value, tq.tag()+1));
+                                if (seen_tq == tq) {
+                                    return tq;
+                                }
+                                tq = seen_tq;
+                            }
+                        }
                     }
                 }
                 else {
@@ -418,7 +448,11 @@ TagGptr RadixTree::get(const char *key, const size_t key_size) {
         }
 
         // assert(n->prefix_size<key_size);
-        p = &n->child[(unsigned char)key[n->prefix_size]];
+        if (key_size < n->prefix_size) {
+            return TagGptr();
+        } else {
+            p = &n->child[(unsigned char)key[n->prefix_size]];
+        }
 
 #ifdef PMEM
         q = *p;
@@ -465,8 +499,11 @@ TagGptr RadixTree::destroy(const char *key, const size_t key_size) {
                 tq = seen_tq;
             }
         }
-
-        p = &n->child[(unsigned char)key[n->prefix_size]];
+        if (key_size < n->prefix_size) {
+            return TagGptr();
+        } else {
+            p = &n->child[(unsigned char)key[n->prefix_size]];
+        }
 #ifdef PMEM
         q = *p;
 #else
@@ -620,28 +657,32 @@ bool RadixTree::next_value(Iter &iter) {
                     }
                 }
                 // check the next child ptr
-                uint64_t upper_bound = (uint64_t)key[n->prefix_size];
-                for(; iter.next_pos <= upper_bound+1; iter.next_pos++) {
-                    //std::cout << "next_value checking ptr at " << iter.next_pos-1 << std::endl;
-                    p = &n->child[iter.next_pos-1];
-#ifdef PMEM
-                    q = *p;
-#else
-                    q = fam_atomic_u64_read((uint64_t*)p);
-#endif
-                    if (q) {
-                        //std::cout << "next_value going down at " << iter.next_pos-1 << std::endl;
-                        iter.path.push(std::make_pair(iter.node, iter.next_pos-1));
-                        iter.node = q;
-                        iter.next_pos = 0;
-                        break;
-                    }
-                }
-
-                if(iter.next_pos > upper_bound+1) {
-                    // then we are done!
-                    iter.node = 0;
+                if (key_size < n->prefix_size) {
                     return false;
+                } else {
+                    uint64_t upper_bound = (uint64_t)key[std::min(n->prefix_size, key_size)];
+                    for(; iter.next_pos <= upper_bound+1; iter.next_pos++) {
+                        //std::cout << "next_value checking ptr at " << iter.next_pos-1 << std::endl;
+                        p = &n->child[iter.next_pos-1];
+#ifdef PMEM
+                        q = *p;
+#else
+                        q = fam_atomic_u64_read((uint64_t*)p);
+#endif
+                        if (q) {
+                            //std::cout << "next_value going down at " << iter.next_pos-1 << std::endl;
+                            iter.path.push(std::make_pair(iter.node, iter.next_pos-1));
+                            iter.node = q;
+                            iter.next_pos = 0;
+                            break;
+                        }
+                    }
+
+                    if(iter.next_pos > upper_bound+1) {
+                        // then we are done!
+                        iter.node = 0;
+                        return false;
+                    }
                 }
             }
         }
@@ -718,30 +759,34 @@ bool RadixTree::lower_bound(Iter &iter) {
             }
             else {
                 // assert(n->prefix_size < key_size);
-                unsigned char idx = (unsigned char)key[n->prefix_size];
-#ifdef PMEM
-                fam_invalidate(&n->child, sizeof(n->child)+sizeof(n->value));
-#endif
-                Gptr *p,q;
-                p = &n->child[(unsigned char)idx];
-#ifdef PMEM
-                q = *p;
-#else
-                q = fam_atomic_u64_read((uint64_t*)p);
-#endif
-                if (q) {
-                    // we have not yet found the starting point
-                    // keep going down
-                    //std::cout << "lower_bound !!! going down at " << (uint64_t)idx << std::endl;
-                    iter.path.push(std::make_pair(iter.node, idx));
-                    iter.node = q;
-                    continue;
-                }
-                else {
-                    // the next node is our starting point
-                    //std::cout << "lower_bound !!! next node " << (uint64_t)idx << std::endl;
-                    iter.next_pos = idx+1;
+                if (key_size < n->prefix_size) {
                     return next_value(iter);
+                } else {
+                    unsigned char idx = (unsigned char)key[std::min(n->prefix_size, key_size)];
+#ifdef PMEM
+                    fam_invalidate(&n->child, sizeof(n->child)+sizeof(n->value));
+#endif
+                    Gptr *p,q;
+                    p = &n->child[(unsigned char)idx];
+#ifdef PMEM
+                    q = *p;
+#else
+                    q = fam_atomic_u64_read((uint64_t*)p);
+#endif
+                    if (q) {
+                        // we have not yet found the starting point
+                        // keep going down
+                        //std::cout << "lower_bound !!! going down at " << (uint64_t)idx << std::endl;
+                        iter.path.push(std::make_pair(iter.node, idx));
+                        iter.node = q;
+                        continue;
+                    }
+                    else {
+                        // the next node is our starting point
+                        //std::cout << "lower_bound !!! next node " << (uint64_t)idx << std::endl;
+                        iter.next_pos = idx+1;
+                        return next_value(iter);
+                    }
                 }
             }
         }
@@ -1061,7 +1106,7 @@ std::pair<Gptr, TagGptr> RadixTree::getC(const char * key, const size_t key_size
         }
 
         // assert(n->prefix_size<key_size);
-        p = &n->child[(unsigned char)key[n->prefix_size]];
+        p = &n->child[(unsigned char)key[std::min(n->prefix_size, key_size)]];
 #ifdef PMEM
         q = *p;
 #else
@@ -1126,8 +1171,7 @@ std::pair<Gptr, TagGptr> RadixTree::destroyC(const char * key, const size_t key_
                 tq = seen_tq;
             }
         }
-
-        p = &n->child[(unsigned char)key[n->prefix_size]];
+        p = &n->child[(unsigned char)key[std::min(n->prefix_size, key_size)]];
 #ifdef PMEM
         q = *p;
 #else

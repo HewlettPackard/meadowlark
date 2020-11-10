@@ -1,5 +1,5 @@
 /*
- *  (c) Copyright 2016-2017 Hewlett Packard Enterprise Development Company LP.
+ *  (c) Copyright 2016-2020 Hewlett Packard Enterprise Development Company LP.
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as published by
@@ -95,6 +95,12 @@ public:
     // also return actual val_len
     virtual int Get (char const *key, size_t const key_len,
 		     char *val, size_t &val_len) = 0;
+
+    // Inserts if not found, if found returns the same.
+    // return 0 (updated) 1 (Inserted) ; -1 (error)
+    virtual int FindOrCreate(char const *key, size_t const key_len,
+            char const *val, size_t const val_len,
+            char *ret_val, size_t &ret_len) = 0;
 
     // return 0 (key exists); -1 (error); -2 (key does not exist)
     virtual int Del (char const *key, size_t const key_len) = 0;
