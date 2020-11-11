@@ -563,7 +563,7 @@ int KVSRadixTree::FindOrCreate(char const *key, size_t const key_len,
         fam_invalidate(&val_p->size, sizeof(size_t));
         size_t val_size = val_p->size;
         if(ret_len < val_size) {
-            std::cout << "  val buffer is too small: " << ret_len << " -> " << val_size << std::endl;
+            LOG(trace) << "  val buffer is too small: " << ret_len << " -> " << val_size << std::endl;
             ret_len = val_size;
             return -1;
         }
