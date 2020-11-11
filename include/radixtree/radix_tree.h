@@ -1,5 +1,5 @@
 /*
- *  (c) Copyright 2016-2017 Hewlett Packard Enterprise Development Company LP.
+ *  (c) Copyright 2016-2020 Hewlett Packard Enterprise Development Company LP.
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as published by
@@ -42,6 +42,14 @@ namespace radixtree {
 using Gptr = nvmm::GlobalPtr;
 using Mmgr = nvmm::MemoryManager;
 using Heap = nvmm::Heap;
+
+typedef enum {
+
+    FIND_OR_CREATE = 0,
+    UPDATE = 1
+
+}UpdateFlags;
+
 
 class RadixTree {
 
@@ -91,7 +99,7 @@ public:
 
     // returns 0 if the key does not exist (insert)
     // returns old value if the key exists (update)
-    TagGptr put(const char * key, const size_t key_size, Gptr value);
+    TagGptr put(const char * key, const size_t key_size, Gptr value, UpdateFlags update);
 
     // returns 0 if not found
     TagGptr get(const char * key, const size_t key_size);

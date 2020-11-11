@@ -1,5 +1,5 @@
 /*
- *  (c) Copyright 2016-2017 Hewlett Packard Enterprise Development Company LP.
+ *  (c) Copyright 2016-2020 Hewlett Packard Enterprise Development Company LP.
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as published by
@@ -131,6 +131,31 @@ TEST(KeyValueStore, SingleProcess) {
     ret = kvs->Put(key.c_str(), key.size(), val.c_str(), val.size());
     EXPECT_EQ(0, ret);
 
+    // Find or Create 1.
+    key = "1";
+    ret = kvs->FindOrCreate(key.c_str(), key.size(), val.c_str(), val.size(), val_buf, val_len);
+    EXPECT_EQ(0, ret);
+
+    // Find or Create 2.
+    key = "2";
+    ret = kvs->FindOrCreate(key.c_str(), key.size(), val.c_str(), val.size(), val_buf, val_len);
+    EXPECT_EQ(1, ret);
+
+    // Delete 2
+    key = "2";
+    ret = kvs->Del(key.c_str(), key.size());
+    EXPECT_EQ(0, ret);
+
+    // Find or Create 2 Again
+    key = "2";
+    ret = kvs->FindOrCreate(key.c_str(), key.size(), val.c_str(), val.size(), val_buf, val_len);
+    EXPECT_EQ(1, ret);
+
+    // Get 2
+    ret = kvs->Get(key.c_str(), key.size(), val_buf, val_len);
+    EXPECT_EQ(0, ret);
+    EXPECT_EQ(val, std::string(val_buf, val_len));
+
     // get 1
     key = "1";
     ret = kvs->Get(key.c_str(), key.size(), val_buf, val_len);
@@ -138,11 +163,38 @@ TEST(KeyValueStore, SingleProcess) {
     EXPECT_EQ(val, std::string(val_buf, val_len));
     ResetBuf(val_buf, val_len, max_val_len);
 
+    /* FindOrCreate further test cases to trigger split */
+    key = "30";
+    ret = kvs->FindOrCreate(key.c_str(), key.size(), val.c_str(), val.size(), val_buf, val_len);
+    EXPECT_EQ(1, ret);
+
+    key = "31";
+    ret = kvs->FindOrCreate(key.c_str(), key.size(), val.c_str(), val.size(), val_buf, val_len);
+    EXPECT_EQ(1, ret);
+
+    key = "32";
+    ret = kvs->FindOrCreate(key.c_str(), key.size(), val.c_str(), val.size(), val_buf, val_len);
+    EXPECT_EQ(1, ret);
+
+    key = "3";
+    ret = kvs->FindOrCreate(key.c_str(), key.size(), val.c_str(), val.size(), val_buf, val_len);
+    EXPECT_EQ(1, ret);
+
+    /* Should return the found value */
+    key = "3";
+    ret = kvs->FindOrCreate(key.c_str(), key.size(), val.c_str(), val.size(), val_buf, val_len);
+    EXPECT_EQ(0, ret);
+
+    key = "32";
+    ret = kvs->FindOrCreate(key.c_str(), key.size(), val.c_str(), val.size(), val_buf, val_len);
+    EXPECT_EQ(0, ret);
+
     // put 1
     key = "1";
     val = rand_string(min_val_len, max_val_len);
     ret = kvs->Put(key.c_str(), key.size(), val.c_str(), val.size());
     EXPECT_EQ(0, ret);
+    ResetBuf(val_buf, val_len, max_val_len);
 
     // get 1
     key = "1";
