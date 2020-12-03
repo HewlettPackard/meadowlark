@@ -139,8 +139,13 @@ int KVSRadixTree::Put (char const *key, size_t const key_len,
     Eop op(emgr_);
 
     Gptr val_gptr = heap_->Alloc(op, val_len+sizeof(ValBuf));
-    if (!val_gptr.IsValid())
-        return -1;
+    if (!val_gptr.IsValid()) {
+		size_t size = heap_->Size();
+		heap_->Resize(2*size);
+		val_gptr = heap_->Alloc(op, val_len+sizeof(ValBuf));
+		if (!val_gptr.IsValid())
+        	return -1;
+	}
 
     //std::cout << " allocated memory at " << val_gptr << std::endl;
 
@@ -349,8 +354,13 @@ int KVSRadixTree::Put (char const *key, size_t const key_len,
     Eop op(emgr_);
 
     Gptr val_gptr = heap_->Alloc(op, val_len+sizeof(ValBuf));
-    if (!val_gptr.IsValid())
-        return -1;
+   	if (!val_gptr.IsValid()) {
+        size_t size = heap_->Size();
+        heap_->Resize(2*size);
+        val_gptr = heap_->Alloc(op, val_len+sizeof(ValBuf));
+        if (!val_gptr.IsValid())
+            return -1;
+    } 
 
     ValBuf *val_p = (ValBuf*)mmgr_->GlobalToLocal(val_gptr);
 
@@ -381,8 +391,13 @@ int KVSRadixTree::Put (Gptr const key_ptr, TagGptr &val_ptr,
     Eop op(emgr_);
 
     Gptr val_gptr = heap_->Alloc(op, val_len+sizeof(ValBuf));
-    if (!val_gptr.IsValid())
-        return -1;
+	if (!val_gptr.IsValid()) {
+        size_t size = heap_->Size();
+        heap_->Resize(2*size);
+        val_gptr = heap_->Alloc(op, val_len+sizeof(ValBuf));
+        if (!val_gptr.IsValid())
+            return -1;
+    }
 
     //std::cout << " allocated memory at " << val_gptr << std::endl;
 
@@ -544,8 +559,13 @@ int KVSRadixTree::FindOrCreate(char const *key, size_t const key_len,
     Eop op(emgr_);
 
     Gptr val_gptr = heap_->Alloc(op, val_len+sizeof(ValBuf));
-    if (!val_gptr.IsValid())
-        return -1;
+	if (!val_gptr.IsValid()) {
+        size_t size = heap_->Size();
+        heap_->Resize(2*size);
+        val_gptr = heap_->Alloc(op, val_len+sizeof(ValBuf));
+        if (!val_gptr.IsValid())
+            return -1;
+    }
 
     ValBuf *val_ptr = (ValBuf*)mmgr_->GlobalToLocal(val_gptr);
 
@@ -571,13 +591,11 @@ int KVSRadixTree::FindOrCreate(char const *key, size_t const key_len,
         fam_invalidate(&val_p->val, ret_len);
         assert(ret_val != nullptr);
         fam_memcpy((char*)ret_val, (char*)val_p->val, ret_len);
-
         return 0;
     } else {
          LOG(trace) << "  successfully inserted "
                    << std::string(key, key_len) << " = " << std::string(val, val_len) << std::endl;
-
-        return 1;
+        return 0;
     }
 
 }

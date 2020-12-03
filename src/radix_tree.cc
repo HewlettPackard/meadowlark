@@ -76,7 +76,12 @@ RadixTree::RadixTree(Mmgr *Mmgr, Heap *Heap, RadixTreeMetrics* Metrics, Gptr Roo
     assert(heap!=NULL);
     if (root==0) {
         root = heap->Alloc(sizeof(Node));
-        assert(root.IsValid());
+		if(!root.IsValid()){
+			size_t size = heap->Size();
+			heap->Resize(2*size);
+			root = heap->Alloc(sizeof(Node));
+			assert(root.IsValid());
+		}
         Node *root_node = (Node*)toLocal(root);
         assert(root_node);
         root_node->prefix_size = 0;
@@ -328,7 +333,12 @@ TagGptr RadixTree::put(const char *key, const size_t key_size, Gptr value, Updat
                 int cnt=alloc_retry_cnt;
                 while(new_leaf_ptr==0 && (cnt--)>0)
                     new_leaf_ptr = heap->Alloc(sizeof(Node));
-                assert(new_leaf_ptr.IsValid());
+				if(!new_leaf_ptr.IsValid()){
+					size_t size = heap->Size();
+					heap->Resize(2*size);
+					new_leaf_ptr = heap->Alloc(sizeof(Node));
+                	assert(new_leaf_ptr.IsValid());
+				}
                 Node*    new_leaf     = (Node*)toLocal(new_leaf_ptr);
                 assert(new_leaf);
                 memcpy(new_leaf->key, key, key_size);
@@ -353,7 +363,12 @@ TagGptr RadixTree::put(const char *key, const size_t key_size, Gptr value, Updat
             int cnt=alloc_retry_cnt;
             while(intermediate_node_ptr==0 && (cnt--)>0)
                 intermediate_node_ptr = heap->Alloc(sizeof(Node));
-            assert(intermediate_node_ptr.IsValid());
+			if(!intermediate_node_ptr.IsValid()){
+                size_t size = heap->Size();
+                heap->Resize(2*size);
+				intermediate_node_ptr = heap->Alloc(sizeof(Node));
+				assert(intermediate_node_ptr.IsValid());
+			}
             intermediate_node = (Node*)toLocal(intermediate_node_ptr);
             assert(intermediate_node);
             // we don't just copy the current common prefix because the prefix at this node may
@@ -389,7 +404,12 @@ TagGptr RadixTree::put(const char *key, const size_t key_size, Gptr value, Updat
                 int cnt=alloc_retry_cnt;
                 while(new_leaf_ptr==0 && (cnt--)>0)
                     new_leaf_ptr = heap->Alloc(sizeof(Node));
-                assert(new_leaf_ptr.IsValid());
+				if(!new_leaf_ptr.IsValid()){
+                    size_t size = heap->Size();
+                    heap->Resize(2*size);
+                    new_leaf_ptr = heap->Alloc(sizeof(Node));
+                    assert(new_leaf_ptr.IsValid());
+                }
                 Node*   new_leaf     = (Node*)toLocal(new_leaf_ptr);
                 assert(new_leaf);
                 memcpy(new_leaf->key, key, key_size);
@@ -959,7 +979,12 @@ std::pair<Gptr, TagGptr> RadixTree::putC(const char * key, const size_t key_size
                 int cnt=alloc_retry_cnt;
                 while(new_leaf_ptr==0 && (cnt--)>0)
                     new_leaf_ptr = heap->Alloc(sizeof(Node));
-                assert(new_leaf_ptr.IsValid());
+				if(!new_leaf_ptr.IsValid()){
+                    size_t size = heap->Size();
+                    heap->Resize(2*size);
+                    new_leaf_ptr = heap->Alloc(sizeof(Node));
+                    assert(new_leaf_ptr.IsValid());
+                }
                 Node*    new_leaf     = (Node*)toLocal(new_leaf_ptr);
                 assert(new_leaf);
                 memcpy(new_leaf->key, key, key_size);
@@ -986,7 +1011,12 @@ std::pair<Gptr, TagGptr> RadixTree::putC(const char * key, const size_t key_size
             int cnt=alloc_retry_cnt;
             while(intermediate_node_ptr==0 && (cnt--)>0)
                 intermediate_node_ptr = heap->Alloc(sizeof(Node));
-            assert(intermediate_node_ptr.IsValid());
+			if(!intermediate_node_ptr.IsValid()){
+				size_t size = heap->Size();
+				heap->Resize(2*size);
+				intermediate_node_ptr = heap->Alloc(sizeof(Node));
+				assert(intermediate_node_ptr.IsValid());
+			}
             intermediate_node = (Node*)toLocal(intermediate_node_ptr);
             assert(intermediate_node);
             // we don't just copy the current common prefix because the prefix at this node may
@@ -1023,7 +1053,12 @@ std::pair<Gptr, TagGptr> RadixTree::putC(const char * key, const size_t key_size
                 int cnt=alloc_retry_cnt;
                 while(new_leaf_ptr==0 && (cnt--)>0)
                     new_leaf_ptr = heap->Alloc(sizeof(Node));
-                assert(new_leaf_ptr.IsValid());
+				if(!new_leaf_ptr.IsValid()){
+                    size_t size = heap->Size();
+                    heap->Resize(2*size);
+                    new_leaf_ptr = heap->Alloc(sizeof(Node));
+                    assert(new_leaf_ptr.IsValid());
+                }
                 Node*   new_leaf     = (Node*)toLocal(new_leaf_ptr);
                 assert(new_leaf);
                 memcpy(new_leaf->key, key, key_size);
