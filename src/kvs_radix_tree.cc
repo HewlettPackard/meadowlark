@@ -141,7 +141,9 @@ int KVSRadixTree::Put (char const *key, size_t const key_len,
     Gptr val_gptr = heap_->Alloc(op, val_len+sizeof(ValBuf));
     if (!val_gptr.IsValid()) {
 		size_t size = heap_->Size();
-		heap_->Resize(2*size);
+		nvmm::ErrorCode ret = heap_->Resize(2*size);
+		if(ret != NO_ERROR)
+			return -1;
 		val_gptr = heap_->Alloc(op, val_len+sizeof(ValBuf));
 		if (!val_gptr.IsValid())
         	return -1;
@@ -356,7 +358,9 @@ int KVSRadixTree::Put (char const *key, size_t const key_len,
     Gptr val_gptr = heap_->Alloc(op, val_len+sizeof(ValBuf));
    	if (!val_gptr.IsValid()) {
         size_t size = heap_->Size();
-        heap_->Resize(2*size);
+    	nvmm::ErrorCode ret = heap_->Resize(2*size);
+        if(ret != NO_ERROR)
+            return -1; 
         val_gptr = heap_->Alloc(op, val_len+sizeof(ValBuf));
         if (!val_gptr.IsValid())
             return -1;
@@ -393,7 +397,9 @@ int KVSRadixTree::Put (Gptr const key_ptr, TagGptr &val_ptr,
     Gptr val_gptr = heap_->Alloc(op, val_len+sizeof(ValBuf));
 	if (!val_gptr.IsValid()) {
         size_t size = heap_->Size();
-        heap_->Resize(2*size);
+       	nvmm::ErrorCode ret = heap_->Resize(2*size);
+        if(ret != NO_ERROR)
+            return -1; 
         val_gptr = heap_->Alloc(op, val_len+sizeof(ValBuf));
         if (!val_gptr.IsValid())
             return -1;
@@ -561,7 +567,9 @@ int KVSRadixTree::FindOrCreate(char const *key, size_t const key_len,
     Gptr val_gptr = heap_->Alloc(op, val_len+sizeof(ValBuf));
 	if (!val_gptr.IsValid()) {
         size_t size = heap_->Size();
-        heap_->Resize(2*size);
+		nvmm::ErrorCode ret = heap_->Resize(2*size);
+        if(ret != NO_ERROR)
+            return -1;
         val_gptr = heap_->Alloc(op, val_len+sizeof(ValBuf));
         if (!val_gptr.IsValid())
             return -1;

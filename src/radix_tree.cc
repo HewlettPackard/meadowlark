@@ -78,7 +78,9 @@ RadixTree::RadixTree(Mmgr *Mmgr, Heap *Heap, RadixTreeMetrics* Metrics, Gptr Roo
         root = heap->Alloc(sizeof(Node));
 		if(!root.IsValid()){
 			size_t size = heap->Size();
-			heap->Resize(2*size);
+			nvmm::ErrorCode ret = heap_->Resize(2*size);
+                if(ret != NO_ERROR)
+                    return -1;			
 			root = heap->Alloc(sizeof(Node));
 			assert(root.IsValid());
 		}
@@ -335,7 +337,9 @@ TagGptr RadixTree::put(const char *key, const size_t key_size, Gptr value, Updat
                     new_leaf_ptr = heap->Alloc(sizeof(Node));
 				if(!new_leaf_ptr.IsValid()){
 					size_t size = heap->Size();
-					heap->Resize(2*size);
+					nvmm::ErrorCode ret = heap_->Resize(2*size);
+                        if(ret != NO_ERROR)
+                            return -1;					
 					new_leaf_ptr = heap->Alloc(sizeof(Node));
                 	assert(new_leaf_ptr.IsValid());
 				}
@@ -365,7 +369,9 @@ TagGptr RadixTree::put(const char *key, const size_t key_size, Gptr value, Updat
                 intermediate_node_ptr = heap->Alloc(sizeof(Node));
 			if(!intermediate_node_ptr.IsValid()){
                 size_t size = heap->Size();
-                heap->Resize(2*size);
+				nvmm::ErrorCode ret = heap_->Resize(2*size);
+                    if(ret != NO_ERROR)
+                        return -1;                
 				intermediate_node_ptr = heap->Alloc(sizeof(Node));
 				assert(intermediate_node_ptr.IsValid());
 			}
@@ -406,7 +412,9 @@ TagGptr RadixTree::put(const char *key, const size_t key_size, Gptr value, Updat
                     new_leaf_ptr = heap->Alloc(sizeof(Node));
 				if(!new_leaf_ptr.IsValid()){
                     size_t size = heap->Size();
-                    heap->Resize(2*size);
+					nvmm::ErrorCode ret = heap_->Resize(2*size);
+                        if(ret != NO_ERROR)
+                            return -1;                    
                     new_leaf_ptr = heap->Alloc(sizeof(Node));
                     assert(new_leaf_ptr.IsValid());
                 }
@@ -981,7 +989,9 @@ std::pair<Gptr, TagGptr> RadixTree::putC(const char * key, const size_t key_size
                     new_leaf_ptr = heap->Alloc(sizeof(Node));
 				if(!new_leaf_ptr.IsValid()){
                     size_t size = heap->Size();
-                    heap->Resize(2*size);
+					nvmm::ErrorCode ret = heap_->Resize(2*size);
+        				if(ret != NO_ERROR)
+            				return -1;		
                     new_leaf_ptr = heap->Alloc(sizeof(Node));
                     assert(new_leaf_ptr.IsValid());
                 }
@@ -1013,7 +1023,9 @@ std::pair<Gptr, TagGptr> RadixTree::putC(const char * key, const size_t key_size
                 intermediate_node_ptr = heap->Alloc(sizeof(Node));
 			if(!intermediate_node_ptr.IsValid()){
 				size_t size = heap->Size();
-				heap->Resize(2*size);
+				nvmm::ErrorCode ret = heap_->Resize(2*size);
+                    if(ret != NO_ERROR)
+                        return -1;
 				intermediate_node_ptr = heap->Alloc(sizeof(Node));
 				assert(intermediate_node_ptr.IsValid());
 			}
@@ -1055,7 +1067,9 @@ std::pair<Gptr, TagGptr> RadixTree::putC(const char * key, const size_t key_size
                     new_leaf_ptr = heap->Alloc(sizeof(Node));
 				if(!new_leaf_ptr.IsValid()){
                     size_t size = heap->Size();
-                    heap->Resize(2*size);
+					nvmm::ErrorCode ret = heap_->Resize(2*size);
+                        if(ret != NO_ERROR)
+                            return -1;                    
                     new_leaf_ptr = heap->Alloc(sizeof(Node));
                     assert(new_leaf_ptr.IsValid());
                 }
