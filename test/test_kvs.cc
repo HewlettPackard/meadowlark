@@ -134,12 +134,12 @@ TEST(KeyValueStore, SingleProcess) {
     // Find or Create 1.
     key = "1";
     ret = kvs->FindOrCreate(key.c_str(), key.size(), val.c_str(), val.size(), val_buf, val_len);
-    EXPECT_EQ(0, ret);
+    EXPECT_EQ(-3, ret);
 
     // Find or Create 2.
     key = "2";
     ret = kvs->FindOrCreate(key.c_str(), key.size(), val.c_str(), val.size(), val_buf, val_len);
-    EXPECT_EQ(1, ret);
+    EXPECT_EQ(0, ret);
 
     // Delete 2
     key = "2";
@@ -149,7 +149,7 @@ TEST(KeyValueStore, SingleProcess) {
     // Find or Create 2 Again
     key = "2";
     ret = kvs->FindOrCreate(key.c_str(), key.size(), val.c_str(), val.size(), val_buf, val_len);
-    EXPECT_EQ(1, ret);
+    EXPECT_EQ(0, ret);
 
     // Get 2
     ret = kvs->Get(key.c_str(), key.size(), val_buf, val_len);
@@ -166,28 +166,28 @@ TEST(KeyValueStore, SingleProcess) {
     /* FindOrCreate further test cases to trigger split */
     key = "30";
     ret = kvs->FindOrCreate(key.c_str(), key.size(), val.c_str(), val.size(), val_buf, val_len);
-    EXPECT_EQ(1, ret);
+    EXPECT_EQ(0, ret);
 
     key = "31";
     ret = kvs->FindOrCreate(key.c_str(), key.size(), val.c_str(), val.size(), val_buf, val_len);
-    EXPECT_EQ(1, ret);
+    EXPECT_EQ(0, ret);
 
     key = "32";
     ret = kvs->FindOrCreate(key.c_str(), key.size(), val.c_str(), val.size(), val_buf, val_len);
-    EXPECT_EQ(1, ret);
+    EXPECT_EQ(0, ret);
 
     key = "3";
     ret = kvs->FindOrCreate(key.c_str(), key.size(), val.c_str(), val.size(), val_buf, val_len);
-    EXPECT_EQ(1, ret);
+    EXPECT_EQ(0, ret);
 
     /* Should return the found value */
     key = "3";
     ret = kvs->FindOrCreate(key.c_str(), key.size(), val.c_str(), val.size(), val_buf, val_len);
-    EXPECT_EQ(0, ret);
+    EXPECT_EQ(-3, ret);
 
     key = "32";
     ret = kvs->FindOrCreate(key.c_str(), key.size(), val.c_str(), val.size(), val_buf, val_len);
-    EXPECT_EQ(0, ret);
+    EXPECT_EQ(-3, ret);
 
     // put 1
     key = "1";
