@@ -3,12 +3,15 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w")
 
 set(BUILD_TESTING OFF) # Disable testcases in these third party libraries
 
-add_subdirectory(gtest)
-add_subdirectory(medida-1a488e5)
-
+if(NOT BUILD_ONLY_LIBRARY)
+  add_subdirectory(gtest)
+  add_subdirectory(medida-1a488e5)
+endif()
 include(cityhash.cmake)
 
-include(libmemcached.cmake)
+if(NOT BUILD_ONLY_LIBRARY)
+  include(libmemcached.cmake)
 
-option(BUILD_SHARED_LIBS "Build yaml-cpp as a shared library" ON)
-add_subdirectory(yaml-cpp-release-0.5.3)
+  option(BUILD_SHARED_LIBS "Build yaml-cpp as a shared library" ON)
+  add_subdirectory(yaml-cpp-release-0.5.3)
+endif()

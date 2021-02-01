@@ -46,6 +46,10 @@ else(${result})
   message(STATUS "Current system is little-endian")
 endif(${result})
 
+if(BUILD_ONLY_LIBRARY)
+   message(STATUS "Building only libraries")
+endif()
+
 #
 # determine tmpfs/lfs location
 #
@@ -175,13 +179,14 @@ endif()
 # #
 # set(ARCH_LIBS pmem fam_atomic)
 
-#
-# enable GTest
-#
-enable_testing()
-#find_package(GTest REQUIRED)
-#include_directories(${GTEST_INCLUDE_DIR})
-
+if(NOT BUILD_ONLY_LIBRARY)
+  #
+  # enable GTest
+  #
+  enable_testing()
+  #find_package(GTest REQUIRED)
+  #include_directories(${GTEST_INCLUDE_DIR})
+endif()
 
 #
 # include directories
@@ -193,15 +198,17 @@ include_directories(${PROJECT_SOURCE_DIR}/test) # test headers (test)
 #
 # third-party libraries
 #
-set(GTEST_ROOT ${PROJECT_SOURCE_DIR}/third-party/gtest)
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 add_subdirectory(third-party)
-include_directories(${PROJECT_SOURCE_DIR}/third-party/gtest/include)
 include_directories(${PROJECT_SOURCE_DIR}/third-party/cityhash/src)
-include_directories(${PROJECT_SOURCE_DIR}/third-party/medida-1a488e5/src/medida)
-include_directories(${PROJECT_SOURCE_DIR}/third-party/yaml-cpp-release-0.5.3/include)
-include_directories(${PROJECT_BINARY_DIR}/third-party/libmemcached-1.0.18/include)
-link_directories(${PROJECT_BINARY_DIR}/third-party/libmemcached-1.0.18/lib)
+if(NOT BUILD_ONLY_LIBRARY)
+  set(GTEST_ROOT ${PROJECT_SOURCE_DIR}/third-party/gtest)
+  include_directories(${PROJECT_SOURCE_DIR}/third-party/gtest/include)
+  include_directories(${PROJECT_SOURCE_DIR}/third-party/medida-1a488e5/src/medida)
+  include_directories(${PROJECT_SOURCE_DIR}/third-party/yaml-cpp-release-0.5.3/include)
+  include_directories(${PROJECT_BINARY_DIR}/third-party/libmemcached-1.0.18/include)
+  link_directories(${PROJECT_BINARY_DIR}/third-party/libmemcached-1.0.18/lib)
+endif()
 
 #
 # add source code
@@ -227,6 +234,7 @@ else() # NUMA
   COMMENT create shelf base dir
 )
 endif()
-
-add_subdirectory(test)
-add_subdirectory(bin)
+if(NOT BUILD_ONLY_LIBRARY)
+  add_subdirectory(test)
+  add_subdirectory(bin)
+endif()
