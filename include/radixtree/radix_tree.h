@@ -77,7 +77,7 @@ public:
         std::stack<std::pair<Gptr, uint64_t>> path;
     };
 
-    static const size_t MAX_KEY_LEN = 40;
+    static const size_t MAX_KEY_LEN = 128;
 
     // NOTE:
     // - an open key (inf) == '\0' and exclusive

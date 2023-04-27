@@ -50,7 +50,7 @@ struct RadixTree::Node {
                                       // char
     size_t prefix_size;
     Gptr child[256];
-    TagGptr value;
+    alignas(16) TagGptr value;
 };
 
 static inline Gptr cas64(Gptr *target, Gptr old_value, Gptr new_value) {
